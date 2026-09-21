@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved conversational direction, pending written-spec review.
+Approved on 2026-09-22.
 
 ## 1. Goal
 
