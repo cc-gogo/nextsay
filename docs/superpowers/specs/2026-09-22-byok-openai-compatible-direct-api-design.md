@@ -21,6 +21,7 @@ The completed app must generate replies without a developer computer, ADB connec
 - Provide a test-connection action before normal use.
 - Store the API key in encrypted app-private storage backed by Android Keystore.
 - Allow the user to edit or replace the saved configuration later.
+- Provide privacy-safe local diagnostics that the user can copy or export for support without ADB.
 - Keep the existing Python backend source in the repository, but do not require it for direct mode.
 
 ## 3. Non-Goals
@@ -31,6 +32,7 @@ The completed app must generate replies without a developer computer, ADB connec
 - Account registration, subscriptions, billing, quota resale, or centralized usage tracking.
 - Synchronizing API configuration across devices.
 - Streaming candidate text in the first version.
+- Automatic upload of diagnostics, crash reports, or analytics.
 
 ## 4. User Experience
 
@@ -84,6 +86,17 @@ A successful test enables saving. Changing any field after a successful test inv
 
 The test request uses a minimal prompt and asks for a very short response. The UI notes that the provider may charge a negligible amount for the test.
 
+### 4.5 Error Support and Diagnostic Export
+
+Every actionable generation or connection-test failure displays a stable error code and a `复制诊断信息` action. The settings surface also provides `诊断日志`, where the user can:
+
+- view the most recent error summary;
+- copy a compact diagnostic summary;
+- export the complete local diagnostic log as a UTF-8 text file through the Android share sheet;
+- clear all saved diagnostic data.
+
+The export flow requires no development computer, data cable, ADB connection, NextSay account, or NextSay-operated server. A user can attach the exported file directly to a support conversation.
+
 ## 5. Android Architecture
 
 ### 5.1 Provider Configuration
@@ -130,6 +143,47 @@ Existing local redaction remains in place before request construction. The provi
 
 Provider configuration is loaded when a generation begins rather than permanently embedding URL or credentials in a singleton created at process start. Updating settings therefore takes effect on the next generation without restarting the accessibility service or IME.
 
+### 5.6 Privacy-Safe Diagnostic Recorder
+
+Add a structured diagnostic recorder with a narrow typed API. Callers record predefined event types and safe fields instead of arbitrary strings. This prevents request or conversation content from reaching the log accidentally.
+
+The recorder stores a rotating log in app-private storage with these fixed limits:
+
+- at most 200 events;
+- at most 256 KiB total;
+- events older than seven days are removed;
+- clearing application data or using `清除诊断日志` removes all events.
+
+Safe diagnostic fields include:
+
+- event timestamp and random event ID;
+- app version and build type;
+- Android version and device manufacturer/model;
+- trigger surface: main activity, overlay, or IME;
+- configured API scheme and host, excluding path parameters and query strings;
+- configured model name;
+- HTTP status code and request duration;
+- normalized error category, such as DNS, connection, TLS, timeout, authentication, quota, model unavailable, incompatible response, or internal error;
+- accessibility-service and IME enabled state;
+- predefined state transitions that contain no user text;
+- exception class and sanitized stack frames for unexpected internal failures.
+
+The recorder must reject or remove:
+
+- API keys, authorization headers, and other credentials;
+- conversation text, contact or conversation titles, drafts, instructions, prompts, and candidate replies;
+- HTTP request and response bodies;
+- full URLs containing paths, query strings, fragments, or user information;
+- raw exception messages unless they pass explicit field-level sanitization.
+
+Release builds write only to this private recorder. Debug builds may additionally mirror the same sanitized structured events to Logcat. Neither build writes raw network bodies or authorization headers.
+
+### 5.7 Local Crash Recovery
+
+Install a minimal crash recorder that captures the exception class, sanitized application stack frames, timestamp, app version, and active surface before delegating to Android's existing uncaught-exception handler. It must not store the raw exception message or arbitrary thread state.
+
+On the next app launch, NextSay indicates that a local crash report is available and offers to export or clear it. Crash data remains local until the user explicitly shares it.
+
 ## 6. Data Flow
 
 1. The user installs and opens NextSay.
@@ -141,6 +195,7 @@ Provider configuration is loaded when a generation begins rather than permanentl
 7. The Android client builds an OpenAI-compatible request and sends it directly to the configured provider over HTTPS.
 8. The client validates exactly three reply candidates.
 9. Existing UI surfaces display the candidates; insertion remains manual and never sends the message automatically.
+10. If an error occurs, NextSay records only structured, privacy-safe diagnostic metadata and lets the user explicitly copy or export it.
 
 ## 7. Compatibility Contract
 
@@ -160,6 +215,8 @@ NextSay does not promise compatibility with endpoints that use different authent
 - Malformed provider responses do not show raw response text, because it may contain private or unsafe content.
 - Generation failure leaves the current conversation and draft untouched and allows an explicit retry.
 - A settings test must be cancellable when the activity closes or the user starts another test.
+- Each surfaced failure receives a stable error code that also appears in the diagnostic export.
+- Diagnostic recording failure must never replace or crash the original user flow.
 
 ## 9. Security and Privacy
 
@@ -168,6 +225,8 @@ NextSay does not promise compatibility with endpoints that use different authent
 - Android application sandboxing protects the stored data from ordinary apps; Android Keystore encryption adds protection for the key at rest.
 - A compromised or rooted device remains outside the security guarantee and is disclosed as a limitation.
 - Requests go directly from the user's phone to the provider URL they entered.
+- Diagnostic data stays in app-private local storage until the user explicitly exports it.
+- Diagnostic exports include the provider scheme/host and model name, but never the API key, URL path/query, or conversation content.
 - The existing promise that NextSay does not automatically send chat messages remains unchanged.
 
 ## 10. Testing and Acceptance
@@ -183,6 +242,11 @@ NextSay does not promise compatibility with endpoints that use different authent
 - HTTP and network error mapping;
 - one compatibility retry when JSON response format is unsupported;
 - missing-configuration behavior for repository, overlay, and IME entry points.
+- diagnostic ring-buffer size and age limits;
+- diagnostic field allow-listing and secret/content rejection;
+- stable error-code correlation between UI and exported events;
+- crash metadata recovery without raw exception messages;
+- clearing and exporting diagnostic data.
 
 ### Integration Verification
 
@@ -193,6 +257,8 @@ NextSay does not promise compatibility with endpoints that use different authent
 - Changing URL, key, or model takes effect without reinstalling or restarting services.
 - Disconnecting the development computer does not affect generation over the phone's own network.
 - No source or packaged resource contains a real API key.
+- A connection or generation failure can be diagnosed from an exported file without ADB.
+- Export inspection confirms that API keys, authorization headers, chat content, prompts, drafts, candidates, and raw network bodies are absent.
 
 ## 11. Delivery Result
 
