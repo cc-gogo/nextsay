@@ -82,7 +82,9 @@ class NextSayRepositoryTest {
             DiagnosticSurface.OVERLAY,
         )
 
-        assertTrue(result.isFailure)
+        val error = result.exceptionOrNull() as ProviderException
+        assertEquals(ProviderErrorCode.API_INCOMPATIBLE, error.code)
+        assertEquals("event-1", error.diagnosticId)
     }
 
     private fun repository(

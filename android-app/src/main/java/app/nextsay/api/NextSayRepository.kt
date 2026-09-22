@@ -49,7 +49,9 @@ class NextSayRepository(
             request,
             surface,
         )
-        require(candidates.size == 3) { "服务返回的候选数量不正确" }
+        if (candidates.size != 3) {
+            throw configurationFailure(ProviderErrorCode.API_INCOMPATIBLE, surface)
+        }
         candidates.map { ReplyCandidate(it.style, it.text) }
     }
 

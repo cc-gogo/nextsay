@@ -1,12 +1,13 @@
 package app.nextsay.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.graphics.Region
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
@@ -39,6 +40,9 @@ import app.nextsay.ocr.MlKitChineseOcrEngine
 import app.nextsay.ocr.WechatOcrParser
 import app.nextsay.privacy.TextRedactor
 import app.nextsay.diagnostics.DiagnosticSurface
+import app.nextsay.diagnostics.DiagnosticEventType
+import app.nextsay.provider.ProviderErrorCode
+import app.nextsay.provider.ProviderException
 import app.nextsay.nextSayDependencies
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +72,7 @@ class NextSayAccessibilityService : AccessibilityService() {
     private val imeGenerationHandler = ImeGenerationHandler(::generateForIme)
     private var activePackage: String? = null
     private var generationSurface = GenerationSurface.ADVANCED
+    private lateinit var repository: NextSayRepository
     private lateinit var controller: OverlayController
     private lateinit var overlay: OverlayWindow
     private lateinit var ocrEngine: MlKitChineseOcrEngine
@@ -77,9 +82,8 @@ class NextSayAccessibilityService : AccessibilityService() {
     private var autoCaptureRunning = false
 
     override fun onServiceConnected() {
-        Log.i(LOG_TAG, "service connected")
         val dependencies = nextSayDependencies
-        val repository = NextSayRepository(
+        repository = NextSayRepository(
             configStore = dependencies.providerConfigStore,
             configValidator = dependencies.providerConfigValidator,
             client = dependencies.replyProviderClient,
@@ -87,17 +91,11 @@ class NextSayAccessibilityService : AccessibilityService() {
             diagnostics = dependencies.diagnostics,
             eventFactory = dependencies.diagnosticEventFactory,
         )
-        controller = OverlayController { context, instruction, relationship ->
-            repository.generate(
-                context,
-                instruction,
-                relationship,
-                if (generationSurface == GenerationSurface.IME) {
-                    DiagnosticSurface.IME
-                } else {
-                    DiagnosticSurface.OVERLAY
-                },
-            )
+        controller = OverlayController(
+            diagnostics = dependencies.diagnostics,
+            eventFactory = dependencies.diagnosticEventFactory,
+        ) { context, instruction, relationship, surface ->
+            repository.generate(context, instruction, relationship, surface)
         }
         ocrEngine = MlKitChineseOcrEngine().also { it.warmUp() }
         screenshotSource = AccessibilityScreenshotSource(this)
@@ -115,6 +113,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                 onRetry = { scope.launch { controller.retry() } },
                 onCandidate = ::insertCandidate,
                 onDismiss = controller::dismiss,
+                onCopyDiagnostics = ::copyDiagnostics,
             ),
             onQuickTrigger = ::runQuickReply,
             onAdvancedTrigger = ::openAdvancedPanel,
@@ -125,14 +124,7 @@ class NextSayAccessibilityService : AccessibilityService() {
             accessibilityCapture = ::captureAccessibilityConversation,
             ocrCapture = ::captureWithOcr,
             mergeHistory = { capture ->
-                Log.i(LOG_TAG, "history merge started messages=${capture.context.messages.size}")
-                try {
-                    withContext(Dispatchers.IO) { historyRepository.mergeAndLoad(capture) }
-                        .also { Log.i(LOG_TAG, "history merge completed messages=${it.messages.size} persisted=${it.persisted}") }
-                } catch (error: Throwable) {
-                    Log.e(LOG_TAG, "history merge failed type=${error.javaClass.simpleName}", error)
-                    throw error
-                }
+                withContext(Dispatchers.IO) { historyRepository.mergeAndLoad(capture) }
             },
             isPackageActive = { packageName ->
                 activePackage == packageName && resolveForegroundApplicationPackage() == packageName
@@ -166,7 +158,6 @@ class NextSayAccessibilityService : AccessibilityService() {
                 panelOpen = overlay.isAnyContentOpen,
             )
         ) {
-            Log.d(LOG_TAG, "ignoring current input method event while panel is open")
             return
         }
         val foregroundPackage = foregroundWindowResolver.resolveEventPackage(
@@ -175,10 +166,6 @@ class NextSayAccessibilityService : AccessibilityService() {
             supportedPackages = SUPPORTED_PACKAGES,
         )
         val supported = foregroundPackage in SUPPORTED_PACKAGES
-        Log.d(
-            LOG_TAG,
-            "event type=${event.eventType} source=$packageName foreground=$foregroundPackage supported=$supported",
-        )
         if (supported) {
             val supportedPackage = foregroundPackage!!
             if (activePackage != supportedPackage) {
@@ -215,27 +202,19 @@ class NextSayAccessibilityService : AccessibilityService() {
 
     fun captureOnUserRequest(): ChatContext? {
         val expectedPackage = activePackage?.takeIf { it in SUPPORTED_PACKAGES }
-        if (expectedPackage == null) {
-            Log.w(LOG_TAG, "capture rejected: no supported active package")
-            return null
-        }
+        if (expectedPackage == null) return null
         return captureAccessibilityConversation(expectedPackage)?.context
     }
 
     private fun captureAccessibilityConversation(expectedPackage: String): CapturedConversation? {
         val root = findSupportedRoot(expectedPackage)
-        if (root == null) {
-            Log.w(LOG_TAG, "capture rejected: no root for $expectedPackage")
-            return null
-        }
+        if (root == null) return null
         return try {
             val nodes = flattener.flatten(root)
             if (nodes.any { it.password }) {
-                Log.w(LOG_TAG, "capture rejected: password node present")
                 return null
             }
             val context = normalizer.normalize(expectedPackage, nodes, resources.displayMetrics.widthPixels)
-            Log.i(LOG_TAG, "capture normalized nodes=${nodes.size} messages=${context.messages.size}")
             val title = titleExtractor.extract(expectedPackage, nodes)
             context.takeIf { it.messages.isNotEmpty() }?.let {
                 CapturedConversation(
@@ -262,6 +241,10 @@ class NextSayAccessibilityService : AccessibilityService() {
     private fun runQuickReply() {
         val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES } ?: return
         generationSurface = GenerationSurface.QUICK
+        missingConfiguration(DiagnosticSurface.OVERLAY)?.let { failure ->
+            overlay.showQuickError(missingConfigurationMessage(), failure.diagnosticId)
+            return
+        }
         controller.dismiss()
         overlay.setBusy(true)
         overlay.showQuickReading()
@@ -270,9 +253,9 @@ class NextSayAccessibilityService : AccessibilityService() {
                 when (val result = obtainFreshContext(packageName)) {
                     is ContextCaptureResult.Success -> {
                         controller.showPreview(result.context)
-                        controller.generate()
+                        controller.generate(surface = DiagnosticSurface.OVERLAY)
                     }
-                    is ContextCaptureResult.CaptureError -> overlay.showQuickError(result.message)
+                    is ContextCaptureResult.CaptureError -> showCaptureFailure(DiagnosticSurface.OVERLAY)
                     ContextCaptureResult.Busy -> overlay.showQuickError("正在读取对话，请稍候")
                     ContextCaptureResult.Cancelled -> overlay.hideQuick()
                 }
@@ -286,17 +269,25 @@ class NextSayAccessibilityService : AccessibilityService() {
         val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES } ?: return
         if (resolveForegroundApplicationPackage() != packageName) return
         generationSurface = GenerationSurface.QUICK
+        missingConfiguration(DiagnosticSurface.OVERLAY)?.let { failure ->
+            overlay.showQuickError(missingConfigurationMessage(), failure.diagnosticId)
+            return
+        }
         val state = controller.state.value
         if (state == app.nextsay.overlay.OverlayState.Idle) {
             runQuickReply()
             return
         }
-        scope.launch { controller.generate(instruction) }
+        scope.launch { controller.generate(instruction, surface = DiagnosticSurface.OVERLAY) }
     }
 
     private fun openAdvancedPanel() {
         val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES } ?: return
         generationSurface = GenerationSurface.ADVANCED
+        missingConfiguration(DiagnosticSurface.OVERLAY)?.let { failure ->
+            overlay.showQuickError(missingConfigurationMessage(), failure.diagnosticId)
+            return
+        }
         controller.dismiss()
         overlay.hideQuick()
         overlay.setBusy(true)
@@ -304,11 +295,8 @@ class NextSayAccessibilityService : AccessibilityService() {
             try {
                 when (val result = obtainFreshContext(packageName)) {
                     is ContextCaptureResult.Success -> controller.showPreview(result.context)
-                    is ContextCaptureResult.CaptureError -> Toast.makeText(
-                        this@NextSayAccessibilityService,
-                        result.message,
-                        Toast.LENGTH_SHORT,
-                    ).show()
+                    is ContextCaptureResult.CaptureError ->
+                        showCaptureFailure(DiagnosticSurface.OVERLAY)
                     ContextCaptureResult.Busy -> Toast.makeText(
                         this@NextSayAccessibilityService,
                         "正在读取对话，请稍候",
@@ -323,8 +311,9 @@ class NextSayAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun generateForIme(targetPackage: String): Result<List<ReplyCandidate>> {
+        missingConfiguration(DiagnosticSurface.IME)?.let { return Result.failure(it) }
         if (activePackage != targetPackage || resolveForegroundApplicationPackage() != targetPackage) {
-            return Result.failure(IllegalStateException("当前聊天已变化，请重新生成"))
+            return Result.failure(recordFailure(ProviderErrorCode.CAPTURE_FAILED, DiagnosticSurface.IME))
         }
         generationSurface = GenerationSurface.IME
         controller.dismiss()
@@ -333,22 +322,20 @@ class NextSayAccessibilityService : AccessibilityService() {
         return try {
             when (val result = obtainFreshContext(targetPackage)) {
                 is ContextCaptureResult.Success -> {
-                    controller.showPreview(result.context)
-                    controller.generate()
-                    val state = controller.state.value
-                    if (
-                        state is app.nextsay.overlay.OverlayState.Results &&
-                        state.context.sourcePackage == targetPackage &&
-                        state.candidates.size == REQUIRED_CANDIDATE_COUNT
-                    ) {
-                        Result.success(state.candidates)
-                    } else {
-                        Result.failure(IllegalStateException("没有生成可用的回复，请重试"))
-                    }
+                    repository.generate(
+                        context = result.context,
+                        instruction = "",
+                        relationship = "unspecified",
+                        surface = DiagnosticSurface.IME,
+                    )
                 }
-                is ContextCaptureResult.CaptureError -> Result.failure(IllegalStateException(result.message))
+                is ContextCaptureResult.CaptureError -> Result.failure(
+                    recordFailure(ProviderErrorCode.CAPTURE_FAILED, DiagnosticSurface.IME),
+                )
                 ContextCaptureResult.Busy -> Result.failure(IllegalStateException("正在处理上一次请求，请稍候"))
-                ContextCaptureResult.Cancelled -> Result.failure(IllegalStateException("当前聊天已变化，请重新生成"))
+                ContextCaptureResult.Cancelled -> Result.failure(
+                    recordFailure(ProviderErrorCode.CAPTURE_FAILED, DiagnosticSurface.IME),
+                )
             }
         } finally {
             overlay.setBusy(false)
@@ -452,7 +439,6 @@ class NextSayAccessibilityService : AccessibilityService() {
                     sourcePackage = packageName,
                     sourceApp = sourceApp,
                 )
-                Log.i(LOG_TAG, "ocr normalized blocks=${blocks.size} messages=${captured?.context?.messages?.size ?: 0}")
                 captured
             } finally {
                 bitmap.recycle()
@@ -469,16 +455,11 @@ class NextSayAccessibilityService : AccessibilityService() {
             else -> return
         }
         if (!insertionGate.tryStart()) return
-        Log.i(LOG_TAG, "candidate insertion started")
         overlay.hidePanelForInsertion()
         scope.launch {
             delay(100)
             val foregroundPackage = resolveForegroundApplicationPackage()
             if (foregroundPackage != expectedPackage || !controller.hasActiveResultsFor(expectedPackage)) {
-                Log.w(
-                    LOG_TAG,
-                    "candidate insertion cancelled foregroundMatches=${foregroundPackage == expectedPackage} resultsActive=${controller.hasActiveResultsFor(expectedPackage)}",
-                )
                 insertionGate.finish()
                 return@launch
             }
@@ -493,21 +474,31 @@ class NextSayAccessibilityService : AccessibilityService() {
                         recycleNode(root)
                     }
                 }
-            } catch (error: RuntimeException) {
-                Log.e(LOG_TAG, "candidate insertion failed", error)
+            } catch (_: RuntimeException) {
                 InsertResult.Failure(null)
             } finally {
                 insertionGate.finish()
             }
             when (result) {
                 is InsertResult.Success -> {
-                    Log.i(LOG_TAG, "candidate insertion completed result=Success")
                     controller.dismiss()
                     Toast.makeText(this@NextSayAccessibilityService, "已写入输入框，请确认后手动发送", Toast.LENGTH_SHORT).show()
                 }
                 is InsertResult.Failure -> {
-                    Log.w(LOG_TAG, "candidate insertion completed result=Failure reason=${result.reason}")
-                    overlay.render(controller.state.value)
+                    val failure = recordFailure(
+                        ProviderErrorCode.INSERTION_FAILED,
+                        DiagnosticSurface.OVERLAY,
+                    )
+                    val current = controller.state.value
+                    if (current is app.nextsay.overlay.OverlayState.Results) {
+                        overlay.render(
+                            app.nextsay.overlay.OverlayState.Error(
+                                current.context,
+                                failure.message.orEmpty(),
+                                failure.diagnosticId,
+                            ),
+                        )
+                    }
                     overlay.showCopyFallback(candidate)
                 }
             }
@@ -523,24 +514,85 @@ class NextSayAccessibilityService : AccessibilityService() {
         if (expectedPackage !in QUICK_INSERT_PACKAGES || !insertionGate.tryStart()) return
         scope.launch {
             delay(100)
-            try {
+            val inserted = try {
                 val foregroundPackage = resolveForegroundApplicationPackage()
                 if (
                     foregroundPackage != expectedPackage ||
                     !controller.hasActiveResultsFor(expectedPackage)
                 ) return@launch
-                val root = findSupportedRoot(expectedPackage) ?: return@launch
-                try {
-                    inserter.insert(root, expectedPackage, foregroundPackage, candidate.text)
-                } finally {
-                    recycleNode(root)
+                val root = findSupportedRoot(expectedPackage)
+                if (root == null) {
+                    false
+                } else {
+                    try {
+                        inserter.insert(root, expectedPackage, foregroundPackage, candidate.text) is InsertResult.Success
+                    } finally {
+                        recycleNode(root)
+                    }
                 }
-            } catch (error: RuntimeException) {
-                Log.e(LOG_TAG, "quick candidate insertion failed", error)
+            } catch (_: RuntimeException) {
+                false
             } finally {
                 insertionGate.finish()
             }
+            if (!inserted) {
+                val failure = recordFailure(
+                    ProviderErrorCode.INSERTION_FAILED,
+                    DiagnosticSurface.OVERLAY,
+                )
+                overlay.showQuickError(failure.message.orEmpty(), failure.diagnosticId)
+            }
         }
+    }
+
+    private fun missingConfiguration(surface: DiagnosticSurface): ProviderException? =
+        if (nextSayDependencies.providerConfigStore.load() == null) {
+            recordFailure(ProviderErrorCode.CONFIG_MISSING, surface)
+        } else {
+            null
+        }
+
+    private fun missingConfigurationMessage() =
+        "请先打开 NextSay 配置模型服务（${ProviderErrorCode.CONFIG_MISSING.wireCode}）"
+
+    private fun showCaptureFailure(surface: DiagnosticSurface) {
+        val failure = recordFailure(ProviderErrorCode.CAPTURE_FAILED, surface)
+        overlay.showQuickError(failure.message.orEmpty(), failure.diagnosticId)
+    }
+
+    private fun recordFailure(
+        code: ProviderErrorCode,
+        surface: DiagnosticSurface,
+    ): ProviderException {
+        val dependencies = nextSayDependencies
+        val type = when (code) {
+            ProviderErrorCode.CAPTURE_FAILED -> DiagnosticEventType.CAPTURE_FAILED
+            ProviderErrorCode.INSERTION_FAILED -> DiagnosticEventType.INSERTION_FAILED
+            else -> DiagnosticEventType.GENERATION_FAILED
+        }
+        val event = dependencies.diagnosticEventFactory.create(
+            type = type,
+            surface = surface,
+            errorCode = code.wireCode,
+        )
+        dependencies.diagnostics.record(event)
+        return ProviderException(code, event.id)
+    }
+
+    private fun copyDiagnostics(diagnosticId: String) {
+        val dependencies = nextSayDependencies
+        val summary = dependencies.diagnostics.find(diagnosticId)
+            ?.let(dependencies.diagnosticFormatter::compact)
+            ?: buildString {
+                appendLine("NextSay 诊断信息")
+                appendLine("错误编号：$diagnosticId")
+                val current = controller.state.value as? app.nextsay.overlay.OverlayState.Error
+                append("错误：${current?.message ?: ProviderErrorCode.APP_INTERNAL.wireCode}")
+            }
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(
+            ClipData.newPlainText("NextSay 诊断信息", summary),
+        )
+        Toast.makeText(this, "诊断信息已复制", Toast.LENGTH_SHORT).show()
     }
 
     private fun findSupportedRoot(expectedPackage: String): android.view.accessibility.AccessibilityNodeInfo? {
@@ -589,10 +641,8 @@ class NextSayAccessibilityService : AccessibilityService() {
     private fun recycleNode(node: android.view.accessibility.AccessibilityNodeInfo) = node.recycle()
 
     private companion object {
-        const val LOG_TAG = "NextSayService"
         const val CAPTURE_SETTLE_MILLIS = 80L
         const val INPUT_AREA_GUARD_DP = 72
-        const val REQUIRED_CANDIDATE_COUNT = 3
         const val WECHAT_PACKAGE = "com.tencent.mm"
         val SUPPORTED_PACKAGES = setOf(
             WECHAT_PACKAGE,
