@@ -1,0 +1,46 @@
+package app.nextsay.diagnostics
+
+import java.util.UUID
+
+class DiagnosticEventFactory(
+    private val metadataProvider: DiagnosticMetadataProvider,
+    private val nowMillis: () -> Long = System::currentTimeMillis,
+    private val newId: () -> String = { UUID.randomUUID().toString() },
+) {
+    fun create(
+        type: DiagnosticEventType,
+        surface: DiagnosticSurface,
+        providerScheme: String? = null,
+        providerHost: String? = null,
+        model: String? = null,
+        httpStatus: Int? = null,
+        durationMillis: Long? = null,
+        errorCode: String? = null,
+        accessibilityEnabled: Boolean? = null,
+        imeEnabled: Boolean? = null,
+        exceptionClass: String? = null,
+        stackFrames: List<String> = emptyList(),
+    ): DiagnosticEvent {
+        val metadata = metadataProvider.current()
+        return DiagnosticEvent(
+            id = newId(),
+            timestampMillis = nowMillis(),
+            type = type,
+            surface = surface,
+            appVersion = metadata.appVersion,
+            buildType = metadata.buildType,
+            androidVersion = metadata.androidVersion,
+            device = metadata.device,
+            providerScheme = providerScheme,
+            providerHost = providerHost,
+            model = model,
+            httpStatus = httpStatus,
+            durationMillis = durationMillis,
+            errorCode = errorCode,
+            accessibilityEnabled = accessibilityEnabled,
+            imeEnabled = imeEnabled,
+            exceptionClass = exceptionClass,
+            stackFrames = stackFrames,
+        )
+    }
+}
