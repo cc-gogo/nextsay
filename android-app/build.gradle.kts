@@ -16,8 +16,6 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "BACKEND_URL", "\"${project.findProperty("NEXTSAY_BACKEND_URL") ?: "http://10.0.2.2:8000/"}\"")
-        buildConfigField("String", "DEV_TOKEN", "\"${project.findProperty("NEXTSAY_DEV_TOKEN") ?: "local-dev-token"}\"")
     }
 
     buildFeatures {
