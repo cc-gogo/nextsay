@@ -3,6 +3,7 @@ package app.nextsay
 import android.content.Context
 import android.os.Build
 import app.nextsay.diagnostics.DiagnosticEventFactory
+import app.nextsay.diagnostics.DiagnosticExportManager
 import app.nextsay.diagnostics.DiagnosticFormatter
 import app.nextsay.diagnostics.DiagnosticMetadata
 import app.nextsay.diagnostics.JsonFileDiagnosticStorage
@@ -43,4 +44,5 @@ class AppDependencies(context: Context) {
         eventFactory = diagnosticEventFactory,
     )
     val diagnosticFormatter = DiagnosticFormatter(gson)
+    val diagnosticExportManager = DiagnosticExportManager(diagnosticFormatter)
 }

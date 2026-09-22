@@ -2,6 +2,7 @@ package app.nextsay
 
 import android.app.Application
 import android.content.Context
+import app.nextsay.diagnostics.LocalCrashHandler
 
 class NextSayApplication : Application() {
     lateinit var dependencies: AppDependencies
@@ -10,6 +11,10 @@ class NextSayApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         dependencies = AppDependencies(this)
+        LocalCrashHandler.install(
+            recorder = dependencies.diagnostics,
+            eventFactory = dependencies.diagnosticEventFactory,
+        )
     }
 }
 

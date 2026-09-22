@@ -17,6 +17,8 @@ import android.widget.Toast
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.InputMethodManager
 import app.nextsay.accessibility.NextSayAccessibilityService
+import app.nextsay.diagnostics.DiagnosticEventType
+import app.nextsay.diagnostics.DiagnosticsActivity
 import app.nextsay.history.AndroidKeystoreMessageCipher
 import app.nextsay.history.ConversationHistoryRepository
 import app.nextsay.history.db.NextSayDatabase
@@ -33,6 +35,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var providerStatus: TextView
+    private lateinit var diagnosticsStatus: TextView
     private lateinit var accessibilityStatus: TextView
     private lateinit var accessibilityButton: Button
     private lateinit var imeStatus: TextView
@@ -96,6 +99,18 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(72, 82, 78))
             setPadding(0, 28.dp, 0, 0)
         })
+        diagnosticsStatus = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.rgb(168, 55, 55))
+            setPadding(0, 20.dp, 0, 6.dp)
+        }
+        root.addView(diagnosticsStatus)
+        root.addView(Button(this).apply {
+            text = "诊断日志"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+            }
+        })
         root.addView(Button(this).apply {
             text = "清空本地聊天历史"
             setOnClickListener { confirmClearHistory() }
@@ -124,6 +139,17 @@ class MainActivity : Activity() {
             providerStatus.text = "状态：请先配置模型服务"
             providerStatus.setTextColor(Color.rgb(168, 55, 55))
         }
+        val hasPriorCrash = dependencies.diagnostics.events().any {
+            it.type == DiagnosticEventType.APP_CRASHED
+        }
+        diagnosticsStatus.text = if (hasPriorCrash) {
+            "检测到上次异常，可导出诊断日志"
+        } else {
+            "诊断日志仅保存在本机"
+        }
+        diagnosticsStatus.setTextColor(
+            if (hasPriorCrash) Color.rgb(168, 55, 55) else Color.rgb(72, 82, 78),
+        )
         val enabled = isNextSayAccessibilityEnabled()
         accessibilityStatus.text = if (enabled) "状态：无障碍服务已开启" else "状态：无障碍服务未开启"
         accessibilityStatus.setTextColor(
