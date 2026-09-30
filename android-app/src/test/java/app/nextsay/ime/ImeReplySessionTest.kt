@@ -129,11 +129,13 @@ class ImeReplySessionTest {
         session.requestGeneration()
         session.candidateForCommit(1, WECHAT)
 
-        session.completeCommit(success = false)
+        session.completeCommit(success = false, diagnosticId = "insert-event")
 
         val state = session.state.value as ImeReplyState.Results
         assertEquals(replies(), state.candidates)
         assertNotNull(state.message)
+        assertTrue(state.message!!.contains("APP-INSERT"))
+        assertEquals("insert-event", state.diagnosticId)
     }
 
     @Test

@@ -5,7 +5,8 @@ import com.google.gson.Gson
 class DiagnosticFormatter(
     private val gson: Gson = Gson(),
 ) {
-    fun compact(event: DiagnosticEvent): String = buildString {
+    fun compact(rawEvent: DiagnosticEvent): String = buildString {
+        val event = DiagnosticEventSanitizer.sanitize(rawEvent)
         appendLine("NextSay 诊断信息")
         appendLine("错误编号：${event.id}")
         appendLine("时间：${event.timestampMillis}")
@@ -22,6 +23,6 @@ class DiagnosticFormatter(
 
     fun export(events: List<DiagnosticEvent>): String = buildString {
         appendLine("NextSay privacy-safe diagnostics")
-        events.forEach { appendLine(gson.toJson(it)) }
+        events.forEach { appendLine(gson.toJson(DiagnosticEventSanitizer.sanitize(it))) }
     }
 }

@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class SharedPreferencesProviderConfigStoreTest {
@@ -53,6 +54,45 @@ class SharedPreferencesProviderConfigStoreTest {
         store.clear()
 
         assertNull(store.load())
+    }
+
+    @Test
+    fun `encryption failure leaves the previous configuration intact`() {
+        store.save(ProviderConfig("https://one/v1", "one", "m1"))
+        val failing = SharedPreferencesProviderConfigStore(values, object : SecretCipher {
+            override fun encrypt(plaintext: String): String = throw IllegalStateException("keystore unavailable")
+            override fun decrypt(ciphertext: String): String = cipher.decrypt(ciphertext)
+        })
+
+        assertThrows(IllegalStateException::class.java) {
+            failing.save(ProviderConfig("https://two/v1", "two", "m2"))
+        }
+
+        assertEquals(ProviderConfig("https://one/v1", "one", "m1"), store.load())
+    }
+
+    @Test
+    fun `failed preference commit removes uncommitted replacement from memory`() {
+        val failingValues = object : PreferenceValues {
+            private val memory = mutableMapOf<String, String>()
+            override fun getString(key: String): String? = memory[key]
+            override fun replace(values: Map<String, String>): Boolean {
+                memory.clear()
+                memory.putAll(values)
+                return false
+            }
+            override fun clear(): Boolean {
+                memory.clear()
+                return true
+            }
+        }
+        val failing = SharedPreferencesProviderConfigStore(failingValues, cipher)
+
+        assertThrows(IllegalStateException::class.java) {
+            failing.save(ProviderConfig("https://two/v1", "two", "m2"))
+        }
+
+        assertNull(failing.load())
     }
 
     private class PrefixSecretCipher : SecretCipher {

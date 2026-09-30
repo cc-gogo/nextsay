@@ -108,7 +108,18 @@ class ProviderSettingsController(
         val validated = validateCurrent() ?: return false
         val fingerprint = fingerprint(validated)
         if (!mutableState.value.canSave || successfulFingerprint != fingerprint) return false
-        store.save(validated.config)
+        try {
+            store.save(validated.config)
+        } catch (_: Exception) {
+            val code = ProviderErrorCode.APP_INTERNAL
+            successfulFingerprint = null
+            mutableState.value = mutableState.value.copy(
+                canSave = false,
+                status = "保存失败，请重试（${code.wireCode}）",
+                diagnosticId = recordUnexpectedFailure(code),
+            )
+            return false
+        }
         mutableState.value = mutableState.value.copy(
             baseUrl = validated.config.baseUrl,
             apiKey = validated.config.apiKey,

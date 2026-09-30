@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NextSay</string>
+    <string name="accessibility_service_name">NextSay 回复助手</string>
+    <string name="accessibility_service_description">仅在你点击浮动按钮后读取或本地识别微信、QQ 当前可见文字，并自动请求回复建议。截图不会保存或上传，消息不会自动发送。</string>
+    <string name="ime_service_name">NextSay AI 输入法</string>
+</resources>

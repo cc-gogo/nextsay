@@ -8,6 +8,8 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import app.nextsay.nextSayDependencies
+import app.nextsay.diagnostics.DiagnosticEventType
+import app.nextsay.diagnostics.DiagnosticSurface
 import app.nextsay.provider.ProviderErrorCode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,8 +62,20 @@ class NextSayInputMethodService : InputMethodService() {
             return
         }
         val candidate = session.candidateForCommit(index, eligibility.targetPackage) ?: return
-        val success = currentInputConnection?.commitText(candidate.text, 1) == true
-        session.completeCommit(success)
+        val success = runCatching {
+            currentInputConnection?.commitText(candidate.text, 1) == true
+        }.getOrDefault(false)
+        val diagnosticId = if (success) null else {
+            val dependencies = nextSayDependencies
+            val event = dependencies.diagnosticEventFactory.create(
+                type = DiagnosticEventType.INSERTION_FAILED,
+                surface = DiagnosticSurface.IME,
+                errorCode = ProviderErrorCode.INSERTION_FAILED.wireCode,
+            )
+            dependencies.diagnostics.record(event)
+            event.id
+        }
+        session.completeCommit(success, diagnosticId)
     }
 
     private fun showInputMethodPicker() {

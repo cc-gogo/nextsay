@@ -22,7 +22,7 @@ class DiagnosticEventFactory(
         stackFrames: List<String> = emptyList(),
     ): DiagnosticEvent {
         val metadata = metadataProvider.current()
-        return DiagnosticEvent(
+        return DiagnosticEventSanitizer.sanitize(DiagnosticEvent(
             id = newId(),
             timestampMillis = nowMillis(),
             type = type,
@@ -41,6 +41,6 @@ class DiagnosticEventFactory(
             imeEnabled = imeEnabled,
             exceptionClass = exceptionClass,
             stackFrames = stackFrames,
-        )
+        ))
     }
 }

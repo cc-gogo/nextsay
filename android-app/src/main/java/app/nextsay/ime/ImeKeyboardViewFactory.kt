@@ -104,6 +104,10 @@ class ImeKeyboardViews(
                 status.text = state.message ?: "选择一条写入当前光标位置"
                 configureGenerate("重新生成", enabled = true)
                 state.candidates.forEachIndexed(::addCandidate)
+                state.diagnosticId?.let { diagnosticId ->
+                    copyDiagnostics.visibility = View.VISIBLE
+                    copyDiagnostics.setOnClickListener { callbacks.onCopyDiagnostics(diagnosticId) }
+                }
             }
             is ImeReplyState.Error -> {
                 status.text = state.message

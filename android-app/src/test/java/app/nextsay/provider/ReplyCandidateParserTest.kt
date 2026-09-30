@@ -53,6 +53,18 @@ class ReplyCandidateParserTest {
         }
     }
 
+    @Test
+    fun `rejects null missing and non-string candidate fields`() {
+        for (json in listOf(
+            "{\"candidates\":null}",
+            "{\"candidates\":[{\"style\":\"concise\"}]}",
+            "{\"candidates\":[{\"style\":\"concise\",\"text\":12}]}",
+            "{\"candidates\":[{\"style\":\"concise\",\"text\":false}]}",
+        )) {
+            assertThrows(IllegalArgumentException::class.java) { parser.parse(json) }
+        }
+    }
+
     private fun envelope(first: String, second: String, third: String) =
         """{"candidates":[
             {"style":"concise","text":"$first"},

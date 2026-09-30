@@ -123,6 +123,35 @@ class ProviderSettingsControllerTest {
         assertFalse(controller.state.value.canSave)
     }
 
+    @Test
+    fun `save failure keeps settings open with correlated safe error`() = runTest {
+        val diagnostics = MemoryDiagnosticRecorder()
+        val store = object : ProviderConfigStore {
+            override fun load(): ProviderConfig? = null
+            override fun save(config: ProviderConfig) {
+                throw IllegalStateException("secret-key from storage")
+            }
+            override fun clear() = Unit
+        }
+        val controller = ProviderSettingsController(
+            store, ProviderConfigValidator(false), SuccessfulTester(), diagnostics,
+            DiagnosticEventFactory(
+                metadataProvider = { DiagnosticMetadata("0.1.0", "test", "14", "Test Device") },
+                nowMillis = { 1_000L },
+                newId = { "save-failed" },
+            ),
+        )
+        configure(controller)
+        controller.testConnection()
+
+        assertFalse(controller.save())
+
+        assertTrue(controller.state.value.status.contains("APP-INTERNAL"))
+        assertEquals("save-failed", controller.state.value.diagnosticId)
+        assertEquals("APP-INTERNAL", diagnostics.events().single().errorCode)
+        assertFalse(controller.state.value.status.contains("secret-key"))
+    }
+
     private fun configure(controller: ProviderSettingsController) {
         controller.updateUrl("https://api.example/v1")
         controller.updateApiKey("key")

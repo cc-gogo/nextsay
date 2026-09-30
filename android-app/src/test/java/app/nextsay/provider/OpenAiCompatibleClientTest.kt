@@ -4,6 +4,7 @@ import app.nextsay.api.MessageDto
 import app.nextsay.api.ReplyRequestDto
 import app.nextsay.diagnostics.DiagnosticEvent
 import app.nextsay.diagnostics.DiagnosticEventFactory
+import app.nextsay.diagnostics.DiagnosticFormatter
 import app.nextsay.diagnostics.DiagnosticMetadata
 import app.nextsay.diagnostics.DiagnosticRecorder
 import app.nextsay.diagnostics.DiagnosticSurface
@@ -57,6 +58,24 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun `user entered model cannot inject credentials into diagnostic export`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+        val config = validated(server).copy(
+            config = validated(server).config.copy(
+                model = "deepseek-chat Authorization: Bearer review-secret-key 私密对话",
+            ),
+        )
+
+        client(server).generate(config, request(), DiagnosticSurface.OVERLAY)
+
+        val export = DiagnosticFormatter().export(diagnostics.events())
+        assertFalse(export.contains("review-secret-key"))
+        assertFalse(export.contains("Authorization"))
+        assertFalse(export.contains("私密对话"))
+    }
+
+    @Test
     fun `retries once without response format only when provider rejects that option`() = runTest {
         val server = startServer()
         server.enqueue(
@@ -77,6 +96,37 @@ class OpenAiCompatibleClientTest {
         assertProviderCode(429, "{}", ProviderErrorCode.API_QUOTA)
         assertProviderCode(404, "{}", ProviderErrorCode.API_MODEL)
         assertProviderCode(200, "{\"choices\":[]}", ProviderErrorCode.API_INCOMPATIBLE)
+    }
+
+    @Test
+    fun `malformed successful responses are correlated as incompatible`() = runTest {
+        for (body in listOf(
+            "not-json",
+            "{\"choices\":null}",
+            "{\"choices\":[{\"message\":null}]}",
+            "{\"choices\":[{\"message\":{\"content\":12}}]}",
+            "{\"choices\":[{\"message\":{\"content\":\"{\\\"candidates\\\":null}\"}}]}",
+        )) {
+            assertProviderCode(
+                200, body, ProviderErrorCode.API_INCOMPATIBLE,
+                expectedHttpStatus = if (body == "not-json") null else 200,
+            )
+            assertEquals("API-INCOMPATIBLE", diagnostics.events().last().errorCode)
+        }
+    }
+
+    @Test
+    fun `connection test maps malformed success body to incompatible`() = runTest {
+        for (body in listOf("not-json", "{\"choices\":null}", "{\"choices\":[{\"message\":null}]}")) {
+            val server = startServer()
+            server.enqueue(MockResponse().setResponseCode(200).setBody(body))
+            val failure = runCatching { client(server).testConnection(validated(server)) }.exceptionOrNull()
+            assertTrue(failure is ProviderException)
+            assertEquals(ProviderErrorCode.API_INCOMPATIBLE, (failure as ProviderException).code)
+            assertEquals("API-INCOMPATIBLE", diagnostics.events().last().errorCode)
+            server.shutdown()
+            this@OpenAiCompatibleClientTest.server = null
+        }
     }
 
     @Test
@@ -115,14 +165,19 @@ class OpenAiCompatibleClientTest {
         assertFalse(body.contains("response_format"))
     }
 
-    private suspend fun assertProviderCode(status: Int, body: String, expected: ProviderErrorCode) {
+    private suspend fun assertProviderCode(
+        status: Int,
+        body: String,
+        expected: ProviderErrorCode,
+        expectedHttpStatus: Int? = status,
+    ) {
         val server = startServer()
         server.enqueue(MockResponse().setResponseCode(status).setBody(body))
         val error = runCatching {
             client(server).generate(validated(server), request(), DiagnosticSurface.OVERLAY)
         }.exceptionOrNull() as ProviderException
         assertEquals(expected, error.code)
-        assertEquals(status, error.httpStatus)
+        assertEquals(expectedHttpStatus, error.httpStatus)
         server.shutdown()
         this.server = null
     }

@@ -62,9 +62,18 @@ class DiagnosticsActivity : Activity() {
         content.addView(Button(this).apply {
             text = "清除诊断日志"
             setOnClickListener {
-                nextSayDependencies.diagnostics.clear()
+                val dependencies = nextSayDependencies
+                val reportsCleared = dependencies.diagnosticExportManager.clearCachedExports(
+                    File(cacheDir, "diagnostics"),
+                )
+                val eventsCleared = dependencies.diagnostics.clearChecked()
                 refresh()
-                Toast.makeText(this@DiagnosticsActivity, "诊断日志已清除", Toast.LENGTH_SHORT).show()
+                val message = if (reportsCleared && eventsCleared) {
+                    "诊断日志已清除"
+                } else {
+                    "清除未完成，请重试"
+                }
+                Toast.makeText(this@DiagnosticsActivity, message, Toast.LENGTH_SHORT).show()
             }
             fullWidth()
         })
@@ -97,7 +106,13 @@ class DiagnosticsActivity : Activity() {
             File(cacheDir, "diagnostics"),
             "nextsay-diagnostics-${System.currentTimeMillis()}.txt",
         )
-        dependencies.diagnosticExportManager.write(output, dependencies.diagnostics.events())
+        val written = runCatching {
+            dependencies.diagnosticExportManager.write(output, dependencies.diagnostics.events())
+        }.isSuccess
+        if (!written) {
+            Toast.makeText(this, "导出失败，请重试", Toast.LENGTH_SHORT).show()
+            return
+        }
         val uri = FileProvider.getUriForFile(this, "$packageName.diagnostics", output)
         val share = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"

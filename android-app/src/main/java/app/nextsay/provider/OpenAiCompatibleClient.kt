@@ -7,6 +7,9 @@ import app.nextsay.diagnostics.DiagnosticEventType
 import app.nextsay.diagnostics.DiagnosticRecorder
 import app.nextsay.diagnostics.DiagnosticSurface
 import com.google.gson.Gson
+import com.google.gson.JsonParseException
+import com.google.gson.stream.MalformedJsonException
+import java.io.EOFException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -47,7 +50,7 @@ class OpenAiCompatibleClient(
             response = execute(config, firstRequest.copy(response_format = null))
         }
         val body = requireSuccess(response)
-        val content = body.choices.firstOrNull()?.message?.content
+        val content = body.choices?.firstOrNull()?.message?.content
             ?: throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
         try {
             parser.parse(content)
@@ -79,7 +82,7 @@ class OpenAiCompatibleClient(
                 ),
             )
             val body = requireSuccess(response)
-            if (body.choices.firstOrNull()?.message?.content.isNullOrBlank()) {
+            if (body.choices?.firstOrNull()?.message?.content.isNullOrBlank()) {
                 throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
             }
         }
@@ -96,6 +99,14 @@ class OpenAiCompatibleClient(
         )
     } catch (error: CancellationException) {
         throw error
+    } catch (error: JsonParseException) {
+        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
+    } catch (error: MalformedJsonException) {
+        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
+    } catch (error: EOFException) {
+        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
+    } catch (error: IllegalStateException) {
+        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
     } catch (error: Throwable) {
         throw RawProviderFailure(mapTransportError(error), cause = error)
     }

@@ -11,9 +11,12 @@ class RotatingDiagnosticRecorderTest {
     @Test
     fun `keeps newest 200 events and removes events older than seven days`() {
         val storage = MemoryDiagnosticStorage()
-        val recorder = RotatingDiagnosticRecorder(storage, maxEvents = 200, maxBytes = 256 * 1024)
         val initialTime = 8L * 24 * 60 * 60 * 1000
         val sevenDays = 7L * 24 * 60 * 60 * 1000
+        var now = initialTime
+        val recorder = RotatingDiagnosticRecorder(
+            storage, maxEvents = 200, maxBytes = 256 * 1024, nowMillis = { now },
+        )
         repeat(205) { index ->
             recorder.record(diagnosticEvent(id = "e$index", timestamp = initialTime + index))
         }
@@ -21,15 +24,48 @@ class RotatingDiagnosticRecorderTest {
         assertEquals(200, recorder.events().size)
         assertEquals("e5", recorder.events().first().id)
 
-        recorder.prune(nowMillis = initialTime + sevenDays + 205)
+        now = initialTime + sevenDays + 205
+        recorder.prune(nowMillis = now)
 
         assertTrue(recorder.events().isEmpty())
     }
 
     @Test
+    fun `read after idle expiry prunes storage without a new event`() {
+        val storage = MemoryDiagnosticStorage()
+        var now = 8L * 24 * 60 * 60 * 1000
+        val recorder = RotatingDiagnosticRecorder(storage, nowMillis = { now })
+        recorder.record(diagnosticEvent(id = "old", timestamp = now))
+
+        now += 8L * 24 * 60 * 60 * 1000
+
+        assertTrue(recorder.events().isEmpty())
+        assertTrue(storage.load().isEmpty())
+    }
+
+    @Test
+    fun `read scrubs unsafe legacy records before they can be exported`() {
+        val storage = MemoryDiagnosticStorage()
+        val timestamp = 8L * 24 * 60 * 60 * 1000
+        storage.save(listOf(diagnosticEvent(
+            id = "legacy", timestamp = timestamp,
+            model = "Authorization: Bearer review-secret-key",
+        )))
+        val recorder = RotatingDiagnosticRecorder(storage, nowMillis = { timestamp })
+
+        val events = recorder.events()
+
+        assertFalse(DiagnosticFormatter().export(events).contains("review-secret-key"))
+        assertFalse(storage.load().toString().contains("review-secret-key"))
+    }
+
+    @Test
     fun `byte cap drops oldest complete events`() {
         val storage = MemoryDiagnosticStorage()
-        val recorder = RotatingDiagnosticRecorder(storage, maxEvents = 200, maxBytes = 450)
+        val recorder = RotatingDiagnosticRecorder(
+            storage, maxEvents = 200, maxBytes = 450,
+            nowMillis = { 8L * 24 * 60 * 60 * 1000 },
+        )
         repeat(10) {
             recorder.record(diagnosticEvent(id = "id-$it", model = "model-name-$it"))
         }
@@ -52,7 +88,9 @@ class RotatingDiagnosticRecorderTest {
     @Test
     fun `find clear and storage failure are safe`() {
         val storage = MemoryDiagnosticStorage()
-        val recorder = RotatingDiagnosticRecorder(storage)
+        val recorder = RotatingDiagnosticRecorder(
+            storage, nowMillis = { 8L * 24 * 60 * 60 * 1000 },
+        )
         recorder.record(diagnosticEvent(id = "find-me"))
 
         assertEquals("find-me", recorder.find("find-me")?.id)
@@ -64,6 +102,7 @@ class RotatingDiagnosticRecorderTest {
         val broken = RotatingDiagnosticRecorder(BrokenDiagnosticStorage())
         broken.record(diagnosticEvent(id = "ignored"))
         assertTrue(broken.events().isEmpty())
+        assertFalse(broken.clearChecked())
     }
 
     private class MemoryDiagnosticStorage : DiagnosticStorage {

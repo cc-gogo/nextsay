@@ -30,15 +30,17 @@ class SharedPreferencesProviderConfigStore(
 
     override fun save(config: ProviderConfig) {
         val encryptedApiKey = cipher.encrypt(config.apiKey)
-        check(
-            values.replace(
-                mapOf(
-                    BASE_URL to config.baseUrl,
-                    API_KEY to encryptedApiKey,
-                    MODEL to config.model,
-                ),
+        val committed = values.replace(
+            mapOf(
+                BASE_URL to config.baseUrl,
+                API_KEY to encryptedApiKey,
+                MODEL to config.model,
             ),
-        ) { "Unable to save provider configuration" }
+        )
+        if (!committed) {
+            values.clear()
+            throw IllegalStateException("Unable to save provider configuration")
+        }
     }
 
     override fun clear() {

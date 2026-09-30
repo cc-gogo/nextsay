@@ -2,6 +2,7 @@ package app.nextsay.ime
 
 import app.nextsay.overlay.ReplyCandidate
 import app.nextsay.provider.ProviderException
+import app.nextsay.provider.ProviderErrorCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -95,12 +96,15 @@ class ImeReplySession {
         }
     }
 
-    fun completeCommit(success: Boolean) {
+    fun completeCommit(success: Boolean, diagnosticId: String? = null) {
         val current = mutableState.value as? ImeReplyState.Results ?: return
         mutableState.value = if (success) {
             ImeReplyState.Inserted(current.targetPackage)
         } else {
-            current.copy(message = "输入框连接已失效，请重新点击聊天输入框")
+            current.copy(
+                message = "输入框连接已失效，请重新点击聊天输入框（${ProviderErrorCode.INSERTION_FAILED.wireCode}）",
+                diagnosticId = diagnosticId,
+            )
         }
     }
 

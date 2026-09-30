@@ -3,21 +3,37 @@ package app.nextsay.provider
 import app.nextsay.api.ReplyCandidateDto
 import com.google.gson.Gson
 import com.google.gson.JsonParseException
+import com.google.gson.JsonParser
 
 class ReplyCandidateParser(
     private val gson: Gson,
 ) {
     fun parse(content: String): List<ReplyCandidateDto> {
         val json = stripSingleFence(content)
-        val envelope = try {
-            gson.fromJson(json, CandidateEnvelopeDto::class.java)
+        val candidates = try {
+            val root = JsonParser.parseString(json)
+            require(root.isJsonObject) { "Candidate JSON must be an object" }
+            val entries = root.asJsonObject.get("candidates")
+            require(entries != null && entries.isJsonArray) { "Candidates must be an array" }
+            entries.asJsonArray.map { entry ->
+                require(entry.isJsonObject) { "Candidate must be an object" }
+                val candidate = entry.asJsonObject
+                fun stringField(name: String): String {
+                    val value = candidate.get(name)
+                    require(value != null && value.isJsonPrimitive && value.asJsonPrimitive.isString) {
+                        "Candidate field must be a string"
+                    }
+                    return value.asString
+                }
+                ReplyCandidateDto(stringField("style"), stringField("text"))
+            }
         } catch (error: JsonParseException) {
             throw IllegalArgumentException("Invalid candidate JSON", error)
-        } ?: throw IllegalArgumentException("Missing candidate JSON")
-        require(envelope.candidates.size == REQUIRED_STYLES.size) {
+        }
+        require(candidates.size == REQUIRED_STYLES.size) {
             "Exactly three candidates are required"
         }
-        val normalized = envelope.candidates.map { candidate ->
+        val normalized = candidates.map { candidate ->
             val style = candidate.style.trim()
             val text = candidate.text.trim()
             require(style in REQUIRED_STYLES) { "Unsupported candidate style" }

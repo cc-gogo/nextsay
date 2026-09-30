@@ -10,6 +10,7 @@ sealed interface ImeReplyState {
         val targetPackage: String,
         val candidates: List<ReplyCandidate>,
         val message: String? = null,
+        val diagnosticId: String? = null,
     ) : ImeReplyState
     data class Error(
         val targetPackage: String,
