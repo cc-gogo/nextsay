@@ -76,6 +76,23 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun `configured key is removed even when it looks like a model identifier`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            "{\"choices\":[{\"message\":{\"content\":\"OK\"}}]}",
+        ))
+        val key = "x9A34eTp03Value"
+        val config = validated(server).copy(
+            config = validated(server).config.copy(apiKey = key, model = key),
+        )
+
+        client(server).testConnection(config)
+
+        assertFalse(diagnostics.events().toString().contains(key))
+        assertFalse(DiagnosticFormatter().export(diagnostics.events()).contains(key))
+    }
+
+    @Test
     fun `retries once without response format only when provider rejects that option`() = runTest {
         val server = startServer()
         server.enqueue(
@@ -117,7 +134,13 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun `connection test maps malformed success body to incompatible`() = runTest {
-        for (body in listOf("not-json", "{\"choices\":null}", "{\"choices\":[{\"message\":null}]}")) {
+        for (body in listOf(
+            "not-json",
+            "{\"choices\":null}",
+            "{\"choices\":[{\"message\":null}]}",
+            "{\"choices\":[{\"message\":{\"content\":12}}]}",
+            "{\"choices\":[{\"message\":{\"content\":false}}]}",
+        )) {
             val server = startServer()
             server.enqueue(MockResponse().setResponseCode(200).setBody(body))
             val failure = runCatching { client(server).testConnection(validated(server)) }.exceptionOrNull()

@@ -49,9 +49,7 @@ class OpenAiCompatibleClient(
         if (response.code() == 400 && rejectsResponseFormat(response)) {
             response = execute(config, firstRequest.copy(response_format = null))
         }
-        val body = requireSuccess(response)
-        val content = body.choices?.firstOrNull()?.message?.content
-            ?: throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
+        val content = requireContent(response)
         try {
             parser.parse(content)
         } catch (error: IllegalArgumentException) {
@@ -81,10 +79,7 @@ class OpenAiCompatibleClient(
                     max_tokens = 4,
                 ),
             )
-            val body = requireSuccess(response)
-            if (body.choices?.firstOrNull()?.message?.content.isNullOrBlank()) {
-                throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
-            }
+            requireContent(response)
         }
     }
 
@@ -125,6 +120,15 @@ class OpenAiCompatibleClient(
         val body = runCatching { response.errorBody()?.string().orEmpty() }.getOrDefault("")
         return body.contains("response_format", ignoreCase = true) ||
             body.contains("json_object", ignoreCase = true)
+    }
+
+    private fun requireContent(response: Response<ChatCompletionResponseDto>): String {
+        val content = requireSuccess(response).choices?.firstOrNull()?.message?.content
+        if (content == null || !content.isJsonPrimitive || !content.asJsonPrimitive.isString) {
+            throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
+        }
+        return content.asString.takeIf { it.isNotBlank() }
+            ?: throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
     }
 
     private suspend fun <T> runRecorded(
@@ -177,13 +181,16 @@ class OpenAiCompatibleClient(
     ) = create(
         type = type,
         surface = surface,
-        providerScheme = config.scheme,
-        providerHost = config.host,
-        model = config.config.model,
+        providerScheme = safeMetadata(config.scheme, config),
+        providerHost = safeMetadata(config.host, config),
+        model = safeMetadata(config.config.model, config),
         httpStatus = httpStatus,
         durationMillis = durationMillis,
         errorCode = errorCode,
     )
+
+    private fun safeMetadata(value: String, config: ValidatedProviderConfig): String? =
+        value.takeUnless { it.contains(config.config.apiKey, ignoreCase = true) }
 
     private fun mapHttpStatus(status: Int): ProviderErrorCode = when (status) {
         401, 403 -> ProviderErrorCode.API_AUTH

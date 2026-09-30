@@ -1,6 +1,7 @@
 package app.nextsay.provider
 
 import app.nextsay.api.ReplyCandidateDto
+import com.google.gson.JsonElement
 
 data class OpenAiMessageDto(
     val role: String,
@@ -20,15 +21,15 @@ data class ChatCompletionRequestDto(
 )
 
 data class ChatCompletionResponseDto(
-    val choices: List<ChatChoiceDto> = emptyList(),
+    val choices: List<ChatChoiceDto?>? = emptyList(),
 )
 
 data class ChatChoiceDto(
-    val message: ChatChoiceMessageDto,
+    val message: ChatChoiceMessageDto?,
 )
 
 data class ChatChoiceMessageDto(
-    val content: String?,
+    val content: JsonElement?,
 )
 
 data class CandidateEnvelopeDto(

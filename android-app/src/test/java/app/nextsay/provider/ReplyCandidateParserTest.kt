@@ -58,8 +58,8 @@ class ReplyCandidateParserTest {
         for (json in listOf(
             "{\"candidates\":null}",
             "{\"candidates\":[{\"style\":\"concise\"}]}",
-            "{\"candidates\":[{\"style\":\"concise\",\"text\":12}]}",
-            "{\"candidates\":[{\"style\":\"concise\",\"text\":false}]}",
+            """{"candidates":[{"style":"concise","text":12},{"style":"tactful","text":"好的"},{"style":"natural","text":"行"}]}""",
+            """{"candidates":[{"style":"concise","text":false},{"style":"tactful","text":"好的"},{"style":"natural","text":"行"}]}""",
         )) {
             assertThrows(IllegalArgumentException::class.java) { parser.parse(json) }
         }

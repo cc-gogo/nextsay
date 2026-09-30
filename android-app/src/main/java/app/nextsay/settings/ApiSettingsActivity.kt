@@ -20,6 +20,7 @@ import androidx.core.widget.doAfterTextChanged
 import app.nextsay.nextSayDependencies
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
@@ -27,6 +28,7 @@ import kotlinx.coroutines.launch
 
 class ApiSettingsActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var connectionTestJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -134,7 +136,10 @@ class ApiSettingsActivity : Activity() {
         url.doAfterTextChanged { controller.updateUrl(it?.toString().orEmpty()) }
         apiKey.doAfterTextChanged { controller.updateApiKey(it?.toString().orEmpty()) }
         model.doAfterTextChanged { controller.updateModel(it?.toString().orEmpty()) }
-        test.setOnClickListener { scope.launch { controller.testConnection() } }
+        test.setOnClickListener {
+            connectionTestJob?.cancel()
+            connectionTestJob = scope.launch { controller.testConnection() }
+        }
         save.setOnClickListener {
             if (controller.save()) {
                 Toast.makeText(this, "模型服务配置已保存", Toast.LENGTH_SHORT).show()
