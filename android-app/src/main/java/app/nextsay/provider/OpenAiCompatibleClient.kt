@@ -57,6 +57,7 @@ class OpenAiCompatibleClient(
                 ProviderErrorCode.API_INCOMPATIBLE,
                 response.code(),
                 error,
+                responseMetadata(response.body()),
             )
         }
     }
@@ -76,7 +77,13 @@ class OpenAiCompatibleClient(
                     messages = listOf(OpenAiMessageDto("user", "仅回复 OK")),
                     temperature = 0.0,
                     response_format = null,
-                    max_tokens = 4,
+                    // Reasoning and the final answer may share the output budget.
+                    max_tokens = 1024,
+                    // This extension is documented by DeepSeek, not every compatible API.
+                    // The probe needs no reasoning; leave normal generation unchanged.
+                    thinking = if (config.host.equals("api.deepseek.com", ignoreCase = true)) {
+                        ThinkingModeDto("disabled")
+                    } else null,
                 ),
             )
             requireContent(response)
@@ -123,12 +130,42 @@ class OpenAiCompatibleClient(
     }
 
     private fun requireContent(response: Response<ChatCompletionResponseDto>): String {
-        val content = requireSuccess(response).choices?.firstOrNull()?.message?.content
+        val body = requireSuccess(response)
+        val metadata = responseMetadata(body)
+        if (metadata.finishReason == "length") {
+            throw RawProviderFailure(
+                ProviderErrorCode.API_OUTPUT_LIMIT, response.code(), metadata = metadata,
+            )
+        }
+        val content = body.choices?.firstOrNull()?.message?.content
         if (content == null || !content.isJsonPrimitive || !content.asJsonPrimitive.isString) {
-            throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
+            throw RawProviderFailure(
+                ProviderErrorCode.API_INCOMPATIBLE, response.code(), metadata = metadata,
+            )
         }
         return content.asString.takeIf { it.isNotBlank() }
-            ?: throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, response.code())
+            ?: throw RawProviderFailure(
+                ProviderErrorCode.API_INCOMPATIBLE, response.code(), metadata = metadata,
+            )
+    }
+
+    /** Reduce provider data to fixed labels/booleans; never retain answer or reasoning text. */
+    private fun responseMetadata(body: ChatCompletionResponseDto?): ResponseMetadata {
+        val choice = body?.choices?.firstOrNull()
+        val rawReason = choice?.finish_reason
+        val reason = rawReason?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString?.takeIf { it in FINISH_REASONS }
+        val content = choice?.message?.content
+        val contentState = when {
+            content == null || content.isJsonNull -> "missing"
+            !content.isJsonPrimitive || !content.asJsonPrimitive.isString -> "non_string"
+            content.asString.isBlank() -> "blank"
+            else -> "present"
+        }
+        val reasoningPresent = choice?.message?.reasoning_content?.let {
+            it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.isNotBlank()
+        }
+        return ResponseMetadata(reason, contentState, reasoningPresent)
     }
 
     private suspend fun <T> runRecorded(
@@ -160,6 +197,9 @@ class OpenAiCompatibleClient(
                 httpStatus = failure.httpStatus,
                 durationMillis = elapsedMillis() - startedAt,
                 errorCode = failure.code.wireCode,
+                finishReason = failure.metadata?.finishReason,
+                contentState = failure.metadata?.contentState,
+                reasoningPresent = failure.metadata?.reasoningPresent,
             )
             diagnostics.record(event)
             throw ProviderException(
@@ -178,6 +218,9 @@ class OpenAiCompatibleClient(
         httpStatus: Int? = null,
         durationMillis: Long? = null,
         errorCode: String? = null,
+        finishReason: String? = null,
+        contentState: String? = null,
+        reasoningPresent: Boolean? = null,
     ) = create(
         type = type,
         surface = surface,
@@ -187,6 +230,9 @@ class OpenAiCompatibleClient(
         httpStatus = httpStatus,
         durationMillis = durationMillis,
         errorCode = errorCode,
+        finishReason = finishReason?.let { safeMetadata(it, config) },
+        contentState = contentState,
+        reasoningPresent = reasoningPresent,
     )
 
     private fun safeMetadata(value: String, config: ValidatedProviderConfig): String? =
@@ -211,9 +257,20 @@ class OpenAiCompatibleClient(
         val code: ProviderErrorCode,
         val httpStatus: Int? = null,
         override val cause: Throwable? = null,
+        val metadata: ResponseMetadata? = null,
     ) : RuntimeException(cause)
 
+    private data class ResponseMetadata(
+        val finishReason: String?,
+        val contentState: String,
+        val reasoningPresent: Boolean?,
+    )
+
     companion object {
+        private val FINISH_REASONS = setOf(
+            "stop", "length", "tool_calls", "function_call", "content_filter", "insufficient_system_resource",
+        )
+
         fun create(
             okHttpClient: OkHttpClient,
             gson: Gson,

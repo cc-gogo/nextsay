@@ -21,7 +21,14 @@ object DiagnosticEventSanitizer {
         errorCode = event.errorCode?.let { safe(it, shortIdentifier) },
         exceptionClass = event.exceptionClass?.let { safe(it, identifier) },
         stackFrames = event.stackFrames.take(40).map { safe(it, frame) },
+        finishReason = event.finishReason?.takeIf { it in FINISH_REASONS },
+        contentState = event.contentState?.takeIf { it in CONTENT_STATES },
     )
+
+    private val FINISH_REASONS = setOf(
+        "stop", "length", "tool_calls", "function_call", "content_filter", "insufficient_system_resource",
+    )
+    private val CONTENT_STATES = setOf("missing", "non_string", "blank", "present")
 
     private fun safe(value: String, allowed: Regex): String =
         if (allowed.matches(value) && !credentialMarker.containsMatchIn(value)) value else "[redacted]"

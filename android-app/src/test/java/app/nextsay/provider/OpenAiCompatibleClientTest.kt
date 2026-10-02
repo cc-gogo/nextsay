@@ -16,8 +16,10 @@ import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -184,8 +186,106 @@ class OpenAiCompatibleClientTest {
 
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("仅回复 OK"))
-        assertTrue(body.contains("\"max_tokens\":4"))
+        assertTrue(gson.fromJson(body, com.google.gson.JsonObject::class.java)["max_tokens"].asInt in 512..1024)
         assertFalse(body.contains("response_format"))
+    }
+
+    @Test
+    fun `DeepSeek connection probe disables thinking without changing generation`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"OK"}}]}""",
+        ))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+        val config = validated(server).copy(host = "api.deepseek.com")
+
+        client(server).testConnection(config)
+        client(server).generate(config, request(), DiagnosticSurface.OVERLAY)
+
+        val probe = gson.fromJson(server.takeRequest().body.readUtf8(), com.google.gson.JsonObject::class.java)
+        assertEquals("disabled", probe.getAsJsonObject("thinking")?.get("type")?.asString)
+        assertTrue(probe["max_tokens"].asInt in 64..1024)
+        val generation = gson.fromJson(server.takeRequest().body.readUtf8(), com.google.gson.JsonObject::class.java)
+        assertFalse(generation.has("thinking"))
+    }
+
+    @Test
+    fun `generic connection probe allows reasoning before the answer without provider extensions`() = runTest {
+        val server = startServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val body = gson.fromJson(request.body.clone().readUtf8(), com.google.gson.JsonObject::class.java)
+                // A reasoning provider exhausts a tiny combined reasoning/output budget.
+                val exhausted = body["max_tokens"].asInt < 512
+                return MockResponse().setResponseCode(200).setBody(
+                    if (exhausted) {
+                        """{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"Need to think first"}}],"usage":{"completion_tokens":4}}"""
+                    } else {
+                        """{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"OK","reasoning_content":"Finished thinking"}}],"usage":{"completion_tokens":40}}"""
+                    },
+                )
+            }
+        }
+
+        client(server).testConnection(validated(server))
+
+        assertEquals(1, server.requestCount)
+        val body = gson.fromJson(server.takeRequest().body.readUtf8(), com.google.gson.JsonObject::class.java)
+        assertFalse(body.has("thinking"))
+        assertFalse(body.has("response_format"))
+    }
+
+    @Test
+    fun `reasoning-only truncated probe reports output limit and safe response metadata`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"private reasoning secret-key"}}],"usage":{"completion_tokens":4,"completion_tokens_details":{"reasoning_tokens":4}}}""",
+        ))
+
+        val failure = runCatching { client(server).testConnection(validated(server)) }.exceptionOrNull()
+
+        assertTrue(failure is ProviderException)
+        assertEquals("API-OUTPUT-LIMIT", (failure as ProviderException).code.wireCode)
+        assertEquals(200, failure.httpStatus)
+        assertEquals(1, server.requestCount)
+        val export = DiagnosticFormatter().export(diagnostics.events())
+        assertTrue(export.contains("\"finishReason\":\"length\""))
+        assertTrue(export.contains("\"contentState\":\"blank\""))
+        assertTrue(export.contains("\"reasoningPresent\":true"))
+        assertFalse(export.contains("private reasoning"))
+        assertFalse(export.contains("secret-key"))
+    }
+
+    @Test
+    fun `provider response labels cannot inject content or credentials into diagnostics`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"choices":[{"finish_reason":"secret-key-private-chat","message":{"role":"assistant","content":12,"reasoning_content":"private-chat secret-key"}}]}""",
+        ))
+
+        val failure = runCatching { client(server).testConnection(validated(server)) }.exceptionOrNull()
+
+        assertEquals(ProviderErrorCode.API_INCOMPATIBLE, (failure as ProviderException).code)
+        val export = DiagnosticFormatter().export(diagnostics.events())
+        assertTrue(export.contains("\"contentState\":\"non_string\""))
+        assertFalse(export.contains("private-chat"))
+        assertFalse(export.contains("secret-key"))
+        assertFalse(export.contains("\"finishReason\""))
+    }
+
+    @Test
+    fun `partial candidate JSON with length finish reason is output limit rather than format error`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"{\"candidates\":["}}]}""",
+        ))
+
+        val failure = runCatching {
+            client(server).generate(validated(server), request(), DiagnosticSurface.OVERLAY)
+        }.exceptionOrNull() as ProviderException
+
+        assertEquals("API-OUTPUT-LIMIT", failure.code.wireCode)
+        assertTrue(DiagnosticFormatter().export(diagnostics.events()).contains("\"contentState\":\"present\""))
     }
 
     private suspend fun assertProviderCode(

@@ -33,6 +33,9 @@ data class DiagnosticEvent(
     val imeEnabled: Boolean? = null,
     val exceptionClass: String? = null,
     val stackFrames: List<String> = emptyList(),
+    val finishReason: String? = null,
+    val contentState: String? = null,
+    val reasoningPresent: Boolean? = null,
 )
 
 data class DiagnosticMetadata(

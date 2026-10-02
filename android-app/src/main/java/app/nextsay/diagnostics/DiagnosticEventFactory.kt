@@ -20,6 +20,9 @@ class DiagnosticEventFactory(
         imeEnabled: Boolean? = null,
         exceptionClass: String? = null,
         stackFrames: List<String> = emptyList(),
+        finishReason: String? = null,
+        contentState: String? = null,
+        reasoningPresent: Boolean? = null,
     ): DiagnosticEvent {
         val metadata = metadataProvider.current()
         return DiagnosticEventSanitizer.sanitize(DiagnosticEvent(
@@ -41,6 +44,9 @@ class DiagnosticEventFactory(
             imeEnabled = imeEnabled,
             exceptionClass = exceptionClass,
             stackFrames = stackFrames,
+            finishReason = finishReason,
+            contentState = contentState,
+            reasoningPresent = reasoningPresent,
         ))
     }
 }

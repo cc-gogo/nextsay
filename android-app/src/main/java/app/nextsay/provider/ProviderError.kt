@@ -11,6 +11,7 @@ enum class ProviderErrorCode(val wireCode: String, val userMessage: String) {
     API_QUOTA("API-QUOTA", "API 额度不足或请求过于频繁"),
     API_MODEL("API-MODEL", "模型不存在或不可用"),
     API_HTTP("API-HTTP", "模型服务返回错误"),
+    API_OUTPUT_LIMIT("API-OUTPUT-LIMIT", "模型输出达到上限，未完整返回回答"),
     API_INCOMPATIBLE("API-INCOMPATIBLE", "模型服务返回格式不兼容"),
     CAPTURE_FAILED("APP-CAPTURE", "读取当前对话失败"),
     INSERTION_FAILED("APP-INSERT", "写入输入框失败"),
