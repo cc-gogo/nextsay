@@ -13,6 +13,7 @@ import app.nextsay.provider.ProviderConfigValidator
 import app.nextsay.provider.ProviderErrorCode
 import app.nextsay.provider.ProviderException
 import app.nextsay.provider.ReplyProviderClient
+import kotlinx.coroutines.CancellationException
 
 class NextSayRepository(
     private val configStore: ProviderConfigStore,
@@ -27,7 +28,7 @@ class NextSayRepository(
         instruction: String,
         relationship: String,
         surface: DiagnosticSurface,
-    ): Result<List<ReplyCandidate>> = runCatching {
+    ): Result<List<ReplyCandidate>> = try {
         val stored = configStore.load() ?: throw configurationFailure(
             ProviderErrorCode.CONFIG_MISSING,
             surface,
@@ -52,7 +53,11 @@ class NextSayRepository(
         if (candidates.size != 3) {
             throw configurationFailure(ProviderErrorCode.API_INCOMPATIBLE, surface)
         }
-        candidates.map { ReplyCandidate(it.style, it.text) }
+        Result.success(candidates.map { ReplyCandidate(it.style, it.text) })
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Throwable) {
+        Result.failure(error)
     }
 
     private fun configurationFailure(

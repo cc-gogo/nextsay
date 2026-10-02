@@ -9,11 +9,20 @@ import app.nextsay.diagnostics.DiagnosticMetadata
 import app.nextsay.diagnostics.DiagnosticRecorder
 import app.nextsay.diagnostics.DiagnosticSurface
 import com.google.gson.Gson
+import com.google.gson.JsonParseException
+import com.google.gson.stream.MalformedJsonException
 import java.net.ConnectException
+import java.io.InterruptedIOException
+import java.io.IOException
+import java.io.EOFException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
@@ -191,7 +200,7 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun `DeepSeek connection probe disables thinking without changing generation`() = runTest {
+    fun `official DeepSeek probe and generation both disable thinking for quick replies`() = runTest {
         val server = startServer()
         server.enqueue(MockResponse().setResponseCode(200).setBody(
             """{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"OK"}}]}""",
@@ -206,7 +215,7 @@ class OpenAiCompatibleClientTest {
         assertEquals("disabled", probe.getAsJsonObject("thinking")?.get("type")?.asString)
         assertTrue(probe["max_tokens"].asInt in 64..1024)
         val generation = gson.fromJson(server.takeRequest().body.readUtf8(), com.google.gson.JsonObject::class.java)
-        assertFalse(generation.has("thinking"))
+        assertEquals("disabled", generation.getAsJsonObject("thinking")?.get("type")?.asString)
     }
 
     @Test
@@ -286,6 +295,84 @@ class OpenAiCompatibleClientTest {
 
         assertEquals("API-OUTPUT-LIMIT", failure.code.wireCode)
         assertTrue(DiagnosticFormatter().export(diagnostics.events()).contains("\"contentState\":\"present\""))
+    }
+
+    @Test
+    fun `generation survives a response that takes longer than ten seconds`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody())
+            .setHeadersDelay(11, TimeUnit.SECONDS))
+
+        val result = client(server).generate(validated(server), request(), DiagnosticSurface.OVERLAY)
+
+        assertEquals(3, result.size)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `connection probe keeps a short deadline and reports timeout accurately`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"choices":[{"message":{"content":"OK"}}]}""",
+        ).setHeadersDelay(11, TimeUnit.SECONDS))
+
+        val failure = runCatching { client(server).testConnection(validated(server)) }.exceptionOrNull()
+
+        assertEquals(ProviderErrorCode.NET_TIMEOUT, (failure as ProviderException).code)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `interrupted IO timeout records safe class rather than exception message`() = runTest {
+        assertTransportCode(InterruptedIOException("timeout private-chat secret-key"), ProviderErrorCode.NET_TIMEOUT)
+
+        val event = diagnostics.events().last()
+        assertEquals("java.io.InterruptedIOException", event.exceptionClass)
+        assertTrue(DiagnosticFormatter().compact(event).contains("异常类型：java.io.InterruptedIOException"))
+        val export = DiagnosticFormatter().export(diagnostics.events())
+        assertFalse(export.contains("private-chat"))
+        assertFalse(export.contains("secret-key"))
+    }
+
+    @Test
+    fun `generic generation does not receive a DeepSeek thinking extension`() = runTest {
+        val server = startServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+
+        client(server).generate(validated(server), request(), DiagnosticSurface.OVERLAY)
+
+        val body = gson.fromJson(server.takeRequest().body.readUtf8(), com.google.gson.JsonObject::class.java)
+        assertFalse(body.has("thinking"))
+    }
+
+    @Test
+    fun `cancelled call cannot record a misleading connection failure`() = runTest {
+        for (lateFailure in listOf(
+            IOException("Canceled secret-key"), EOFException("Cancelled response"),
+            MalformedJsonException("Cancelled JSON"), JsonParseException("Cancelled parse"),
+            IllegalStateException("Cancelled decoding"),
+        )) {
+            val api = object : OpenAiCompatibleApi {
+                override suspend fun complete(
+                    url: String,
+                    authorization: String,
+                    request: ChatCompletionRequestDto,
+                ): Response<ChatCompletionResponseDto> {
+                    try { awaitCancellation() }
+                    finally { throw lateFailure }
+                }
+            }
+            val previousEvents = diagnostics.events().size
+
+            val thrown = runCatching {
+                withTimeout(10) {
+                    client(api).generate(localValidated(), request(), DiagnosticSurface.OVERLAY)
+                }
+            }.exceptionOrNull()
+
+            assertTrue(thrown is TimeoutCancellationException)
+            assertEquals(listOf("GENERATION_STARTED"), diagnostics.events().drop(previousEvents).map { it.type.name })
+        }
     }
 
     private suspend fun assertProviderCode(

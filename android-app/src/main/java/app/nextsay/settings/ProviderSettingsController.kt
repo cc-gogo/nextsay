@@ -15,10 +15,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+internal const val DEFAULT_PROVIDER_MODEL = "deepseek-flash"
+
 data class ProviderSettingsState(
     val baseUrl: String = "",
     val apiKey: String = "",
-    val model: String = "",
+    val model: String = DEFAULT_PROVIDER_MODEL,
     val testing: Boolean = false,
     val canSave: Boolean = false,
     val status: String = "",
@@ -37,7 +39,7 @@ class ProviderSettingsController(
         ProviderSettingsState(
             baseUrl = initial?.baseUrl.orEmpty(),
             apiKey = initial?.apiKey.orEmpty(),
-            model = initial?.model.orEmpty(),
+            model = initial?.model ?: DEFAULT_PROVIDER_MODEL,
         ),
     )
     private var epoch = 0L

@@ -16,6 +16,7 @@ import app.nextsay.provider.ProviderErrorCode
 import app.nextsay.provider.ProviderException
 import app.nextsay.provider.ReplyProviderClient
 import app.nextsay.provider.ValidatedProviderConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -87,6 +88,18 @@ class NextSayRepositoryTest {
         assertEquals("event-1", error.diagnosticId)
     }
 
+    @Test
+    fun `repository propagates cancellation rather than wrapping it as a failed result`() = runTest {
+        val client = FakeReplyProviderClient(failure = CancellationException("cancelled"))
+        val repository = repository(MutableProviderConfigStore(config()), client)
+
+        val thrown = runCatching {
+            repository.generate(context(), "", "unspecified", DiagnosticSurface.OVERLAY)
+        }.exceptionOrNull()
+
+        assertTrue(thrown is CancellationException)
+    }
+
     private fun repository(
         store: MutableProviderConfigStore,
         client: FakeReplyProviderClient,
@@ -142,6 +155,7 @@ class NextSayRepositoryTest {
 
     private class FakeReplyProviderClient(
         private val replies: List<ReplyCandidateDto> = emptyList(),
+        private val failure: Throwable? = null,
     ) : ReplyProviderClient {
         var generateCalls = 0
         var request: ReplyRequestDto? = null
@@ -157,6 +171,7 @@ class NextSayRepositoryTest {
             this.request = request
             this.surface = surface
             models += config.config.model
+            failure?.let { throw it }
             return replies
         }
 

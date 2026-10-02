@@ -93,7 +93,7 @@ class ApiSettingsActivity : Activity() {
         })
 
         val model = EditText(this).apply {
-            hint = "deepseek-chat"
+            hint = DEFAULT_PROVIDER_MODEL
             inputType = InputType.TYPE_CLASS_TEXT
             setText(initial.model)
             fullWidth()

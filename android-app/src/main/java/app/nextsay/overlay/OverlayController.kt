@@ -13,7 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeout
 
 class OverlayController(
-    private val timeoutMillis: Long = 10_000,
+    // HTTP generation has a 60s deadline; allow a small margin for local work.
+    private val timeoutMillis: Long = 65_000,
     private val diagnostics: DiagnosticRecorder? = null,
     private val eventFactory: DiagnosticEventFactory? = null,
     private val generateReplies: suspend (

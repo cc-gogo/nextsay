@@ -24,6 +24,30 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProviderSettingsControllerTest {
     @Test
+    fun `fresh settings prefill flash without saving or making a request`() {
+        val store = FakeStore()
+        val tester = CountingTester()
+        val controller = controller(store, tester)
+
+        assertEquals("deepseek-flash", controller.state.value.model)
+        assertEquals("", controller.state.value.apiKey)
+        assertFalse(controller.state.value.canSave)
+        assertNull(store.load())
+        assertEquals(0, tester.calls)
+    }
+
+    @Test
+    fun `opening settings preserves an existing custom model`() {
+        val controller = controller(
+            FakeStore(ProviderConfig("https://custom.example/v1", "key", "my-custom-model")),
+            SuccessfulTester(),
+        )
+
+        assertEquals("my-custom-model", controller.state.value.model)
+        assertFalse(controller.state.value.canSave)
+    }
+
+    @Test
     fun `valid fields must pass test before save`() = runTest {
         val store = FakeStore()
         val controller = controller(store, SuccessfulTester())

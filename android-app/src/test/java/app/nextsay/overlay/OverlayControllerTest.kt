@@ -89,6 +89,19 @@ class OverlayControllerTest {
     }
 
     @Test
+    fun `default overlay deadline allows a twenty second generation`() = runTest {
+        val controller = OverlayController { _, _, _, _ ->
+            delay(20_000)
+            Result.success(replies())
+        }
+        controller.showPreview(context)
+
+        controller.generate()
+
+        assertTrue(controller.state.value is OverlayState.Results)
+    }
+
+    @Test
     fun `app change clears reviewed context`() {
         val controller = OverlayController { _, _, _, _ -> Result.success(replies()) }
         controller.showPreview(context)

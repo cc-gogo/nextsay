@@ -10,12 +10,14 @@ import com.google.gson.Gson
 import com.google.gson.JsonParseException
 import com.google.gson.stream.MalformedJsonException
 import java.io.EOFException
+import java.io.InterruptedIOException
 import java.net.ConnectException
-import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -28,6 +30,7 @@ class OpenAiCompatibleClient(
     private val diagnostics: DiagnosticRecorder,
     private val eventFactory: DiagnosticEventFactory,
     private val elapsedMillis: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val connectionTestApi: OpenAiCompatibleApi = api,
 ) : ReplyProviderClient {
     override suspend fun generate(
         config: ValidatedProviderConfig,
@@ -44,6 +47,7 @@ class OpenAiCompatibleClient(
         val firstRequest = ChatCompletionRequestDto(
             model = config.config.model,
             messages = messages,
+            thinking = quickReplyThinking(config),
         )
         var response = execute(config, firstRequest)
         if (response.code() == 400 && rejectsResponseFormat(response)) {
@@ -79,12 +83,9 @@ class OpenAiCompatibleClient(
                     response_format = null,
                     // Reasoning and the final answer may share the output budget.
                     max_tokens = 1024,
-                    // This extension is documented by DeepSeek, not every compatible API.
-                    // The probe needs no reasoning; leave normal generation unchanged.
-                    thinking = if (config.host.equals("api.deepseek.com", ignoreCase = true)) {
-                        ThinkingModeDto("disabled")
-                    } else null,
+                    thinking = quickReplyThinking(config),
                 ),
+                requestApi = connectionTestApi,
             )
             requireContent(response)
         }
@@ -93,25 +94,31 @@ class OpenAiCompatibleClient(
     private suspend fun execute(
         config: ValidatedProviderConfig,
         request: ChatCompletionRequestDto,
+        requestApi: OpenAiCompatibleApi = api,
     ): Response<ChatCompletionResponseDto> = try {
-        api.complete(
+        requestApi.complete(
             url = config.chatCompletionsUrl,
             authorization = "Bearer ${config.config.apiKey}",
             request = request,
         )
     } catch (error: CancellationException) {
         throw error
-    } catch (error: JsonParseException) {
-        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
-    } catch (error: MalformedJsonException) {
-        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
-    } catch (error: EOFException) {
-        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
-    } catch (error: IllegalStateException) {
-        throw RawProviderFailure(ProviderErrorCode.API_INCOMPATIBLE, cause = error)
     } catch (error: Throwable) {
-        throw RawProviderFailure(mapTransportError(error), cause = error)
+        // A cancelled response may surface either a transport or decoding error.
+        // Cancellation takes precedence over all failure classifications.
+        currentCoroutineContext().ensureActive()
+        val code = when (error) {
+            is JsonParseException, is MalformedJsonException, is EOFException, is IllegalStateException ->
+                ProviderErrorCode.API_INCOMPATIBLE
+            else -> mapTransportError(error)
+        }
+        throw RawProviderFailure(code, cause = error)
     }
+
+    private fun quickReplyThinking(config: ValidatedProviderConfig): ThinkingModeDto? =
+        if (config.host.equals("api.deepseek.com", ignoreCase = true)) {
+            ThinkingModeDto("disabled")
+        } else null // Do not send provider-specific options to generic compatible APIs.
 
     private fun requireSuccess(
         response: Response<ChatCompletionResponseDto>,
@@ -200,6 +207,7 @@ class OpenAiCompatibleClient(
                 finishReason = failure.metadata?.finishReason,
                 contentState = failure.metadata?.contentState,
                 reasoningPresent = failure.metadata?.reasoningPresent,
+                exceptionClass = failure.cause?.javaClass?.name,
             )
             diagnostics.record(event)
             throw ProviderException(
@@ -221,6 +229,7 @@ class OpenAiCompatibleClient(
         finishReason: String? = null,
         contentState: String? = null,
         reasoningPresent: Boolean? = null,
+        exceptionClass: String? = null,
     ) = create(
         type = type,
         surface = surface,
@@ -233,6 +242,7 @@ class OpenAiCompatibleClient(
         finishReason = finishReason?.let { safeMetadata(it, config) },
         contentState = contentState,
         reasoningPresent = reasoningPresent,
+        exceptionClass = exceptionClass?.let { safeMetadata(it, config) },
     )
 
     private fun safeMetadata(value: String, config: ValidatedProviderConfig): String? =
@@ -246,7 +256,7 @@ class OpenAiCompatibleClient(
     }
 
     private fun mapTransportError(error: Throwable): ProviderErrorCode = when (error) {
-        is SocketTimeoutException -> ProviderErrorCode.NET_TIMEOUT
+        is InterruptedIOException -> ProviderErrorCode.NET_TIMEOUT
         is UnknownHostException -> ProviderErrorCode.NET_DNS
         is SSLException -> ProviderErrorCode.NET_TLS
         is ConnectException -> ProviderErrorCode.NET_CONNECT
@@ -277,21 +287,29 @@ class OpenAiCompatibleClient(
             diagnostics: DiagnosticRecorder,
             eventFactory: DiagnosticEventFactory,
         ): OpenAiCompatibleClient {
-            val client = okHttpClient.newBuilder()
+            val generationClient = okHttpClient.newBuilder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .build()
+            val probeClient = okHttpClient.newBuilder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
                 .callTimeout(10, TimeUnit.SECONDS)
                 .build()
-            val api = Retrofit.Builder()
+            fun createApi(client: OkHttpClient) = Retrofit.Builder()
                 .baseUrl("https://localhost/")
                 .client(client)
                 .addConverterFactory(GsonConverterFactory.create(gson))
                 .build()
                 .create(OpenAiCompatibleApi::class.java)
             return OpenAiCompatibleClient(
-                api = api,
+                api = createApi(generationClient),
                 promptBuilder = ReplyPromptBuilder(gson),
                 parser = ReplyCandidateParser(gson),
                 diagnostics = diagnostics,
                 eventFactory = eventFactory,
+                connectionTestApi = createApi(probeClient),
             )
         }
     }
