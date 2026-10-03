@@ -161,4 +161,46 @@ class ForegroundEventPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `keeps the active chat when the input method temporarily hides the application window`() {
+        assertTrue(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.miui.inputmethod",
+                resolvedForeground = null,
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.miui.inputmethod",
+                supportedPackages = setOf("com.tencent.mm"),
+            ),
+        )
+    }
+
+    @Test
+    fun `keeps the active chat for a Xiaomi keyboard event even if its package is not the saved default`() {
+        assertTrue(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.baidu.input_mi",
+                resolvedForeground = null,
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.iflytek.inputmethod.miui",
+                supportedPackages = setOf("com.tencent.mm"),
+            ),
+        )
+    }
+
+    @Test
+    fun `does not keep the chat when the user really leaves to the launcher`() {
+        assertFalse(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.miui.home",
+                resolvedForeground = "com.miui.home",
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.miui.inputmethod",
+                supportedPackages = setOf("com.tencent.mm"),
+            ),
+        )
+    }
 }

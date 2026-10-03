@@ -13,6 +13,26 @@ class ForegroundEventPolicy {
         panelOpen: Boolean,
     ): Boolean = panelOpen && defaultImePackage != null && eventPackage == defaultImePackage
 
+    /**
+     * Some Android skins briefly report no application window while showing
+     * the IME. Do not interpret that transient gap as leaving the chat.
+     */
+    fun shouldKeepActiveDuringTransientWindow(
+        eventPackage: String?,
+        resolvedForeground: String?,
+        activePackage: String?,
+        ownPackage: String,
+        defaultImePackage: String?,
+        supportedPackages: Set<String>,
+    ): Boolean = activePackage != null &&
+        activePackage in supportedPackages &&
+        resolvedForeground == null &&
+        (eventPackage == ownPackage || eventPackage == defaultImePackage ||
+            eventPackage == "com.android.systemui" || eventPackage?.endsWith(".systemui") == true ||
+            eventPackage?.contains("inputmethod", ignoreCase = true) == true ||
+            eventPackage?.contains("input_", ignoreCase = true) == true ||
+            eventPackage?.contains("keyboard", ignoreCase = true) == true)
+
     fun shouldScheduleRefresh(
         eventPackage: String?,
         foregroundPackage: String? = eventPackage,

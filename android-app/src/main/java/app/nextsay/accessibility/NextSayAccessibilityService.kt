@@ -366,17 +366,32 @@ class NextSayAccessibilityService : AccessibilityService() {
             latestContextCache.clear()
             return
         }
+        val defaultImePackage = defaultInputMethodPackage()
         if (
             foregroundEventPolicy.shouldIgnore(
                 eventPackage = packageName,
-                defaultImePackage = defaultInputMethodPackage(),
+                defaultImePackage = defaultImePackage,
                 panelOpen = overlay.isAnyContentOpen,
             )
         ) {
             return
         }
+        val resolvedForegroundPackage = resolveForegroundApplicationPackage()
+        if (foregroundEventPolicy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = packageName,
+                resolvedForeground = resolvedForegroundPackage,
+                activePackage = activePackage,
+                ownPackage = applicationContext.packageName,
+                defaultImePackage = defaultImePackage,
+                supportedPackages = SUPPORTED_PACKAGES,
+            )) {
+            // Xiaomi and some other ROMs briefly expose only the IME/system
+            // window while the chat input is opening. Keep the trigger and
+            // current candidates until the real application window returns.
+            return
+        }
         val foregroundPackage = foregroundWindowResolver.resolveEventPackage(
-            resolvedPackage = resolveForegroundApplicationPackage(),
+            resolvedPackage = resolvedForegroundPackage,
             eventPackage = packageName,
             supportedPackages = SUPPORTED_PACKAGES,
         )
@@ -428,7 +443,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                     eventPackage = packageName,
                     foregroundPackage = supportedPackage,
                     ownPackage = applicationContext.packageName,
-                    defaultImePackage = defaultInputMethodPackage(),
+                    defaultImePackage = defaultImePackage,
                     supportedPackages = SUPPORTED_PACKAGES,
                     interactive = interactive,
                     eventType = event.eventType,
