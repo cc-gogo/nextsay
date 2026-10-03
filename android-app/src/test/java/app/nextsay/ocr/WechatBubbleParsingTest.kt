@@ -124,4 +124,16 @@ class WechatBubbleParsingTest {
         ))
         assertEquals(MessageRole.UNKNOWN, messages.single().role)
     }
+
+    @Test
+    fun `voice transcript keeps side when bubble pixels are not detected`() {
+        // WeChat's converted voice text can remain visible while the colored
+        // bubble is covered by the keyboard or overlay. The text is still a
+        // normal left/right chat line and should not become an unknown turn.
+        val messages = parse(listOf(
+            line("我刚刚在路上", 180, 450, 430, 495),
+        ), emptyList())
+        assertEquals(MessageRole.OTHER, messages.single().role)
+        assertTrue(messages.single().confidence <= .72f)
+    }
 }

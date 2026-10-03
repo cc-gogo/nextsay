@@ -18,6 +18,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
+import android.util.Log
 import android.widget.Toast
 import app.nextsay.api.NextSayRepository
 import app.nextsay.capture.AccessibilityScreenshotSource
@@ -124,6 +125,15 @@ class NextSayAccessibilityService : AccessibilityService() {
     private var imeGenerationJob: Job? = null
     private var advancedGenerationJob: Job? = null
     private var unsupportedPackageJob: Job? = null
+    // Cancelling a coroutine that already passed delay() is racy on some ROMs.
+    // This token makes an old unsupported-app teardown harmless after a chat
+    // window becomes foreground again.
+    private var unsupportedTeardownToken = 0L
+    private fun cancelUnsupportedTeardown() {
+        unsupportedPackageJob?.cancel()
+        unsupportedPackageJob = null
+        unsupportedTeardownToken++
+    }
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!::overlay.isInitialized) return
@@ -402,6 +412,11 @@ class NextSayAccessibilityService : AccessibilityService() {
             return
         }
         val defaultImePackage = defaultInputMethodPackage()
+        // A supported-app or IME event invalidates any stale delayed teardown,
+        // even when the foreground policy ignores the event while a panel is open.
+        if (packageName in SUPPORTED_PACKAGES || packageName == defaultImePackage) {
+            cancelUnsupportedTeardown()
+        }
         if (
             foregroundEventPolicy.shouldIgnore(
                 eventPackage = packageName,
@@ -425,6 +440,7 @@ class NextSayAccessibilityService : AccessibilityService() {
             // current candidates until the real application window returns.
             // The ROM may have removed the accessibility window during the
             // same transition, so reconcile the actual attachment as well.
+            cancelUnsupportedTeardown()
             overlay.setSupportedAppActive(true)
             return
         }
@@ -434,9 +450,9 @@ class NextSayAccessibilityService : AccessibilityService() {
             supportedPackages = SUPPORTED_PACKAGES,
         )
         val supported = foregroundPackage in SUPPORTED_PACKAGES
+        Log.d("NextSayForeground", "event=$packageName type=${event.eventType} resolved=$resolvedForegroundPackage foreground=$foregroundPackage active=$activePackage supported=$supported ime=$defaultImePackage")
         if (supported) {
-            unsupportedPackageJob?.cancel()
-            unsupportedPackageJob = null
+            cancelUnsupportedTeardown()
             val supportedPackage = foregroundPackage!!
             val supportedPackageChanged = activePackage != supportedPackage
             if (supportedPackageChanged) {
@@ -500,12 +516,15 @@ class NextSayAccessibilityService : AccessibilityService() {
             // attaching the IME. Defer teardown until the foreground remains
             // unsupported after the transition settles.
             unsupportedPackageJob?.cancel()
+            val teardownToken = ++unsupportedTeardownToken
             unsupportedPackageJob = scope.launch {
                 delay(350L)
+                if (teardownToken != unsupportedTeardownToken) return@launch
                 val settled = resolveForegroundApplicationPackage()
                 val keyboardTransition = settled == null &&
                     windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
                 if (settled in SUPPORTED_PACKAGES || keyboardTransition) return@launch
+                if (teardownToken != unsupportedTeardownToken) return@launch
                 cancelQuickRequest()
                 cancelImeGeneration()
                 cancelAdvancedGeneration()

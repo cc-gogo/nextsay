@@ -45,7 +45,7 @@ class WechatOcrParser {
             .sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
             .toList()
         val messages = if (bubbles != null) {
-            messagesByBubble(messageBlocks, bubbles)
+            messagesByBubble(messageBlocks, bubbles, screenWidth)
         } else {
             // QQ text bounds alone cannot distinguish wide outgoing bubbles from incoming ones.
             mergeAdjacentLines(messageBlocks.map { block ->
@@ -71,7 +71,11 @@ class WechatOcrParser {
 
     private fun normalize(text: String): String = text.trim().replace(WHITESPACE_PATTERN, " ")
 
-    private fun messagesByBubble(blocks: List<OcrTextBlock>, bubbles: List<OcrBubble>): List<ChatMessage> {
+    private fun messagesByBubble(
+        blocks: List<OcrTextBlock>,
+        bubbles: List<OcrBubble>,
+        screenWidth: Int,
+    ): List<ChatMessage> {
         val media = bubbles.filter { it.isMedia }
         val grouped = linkedMapOf<Int, MutableList<OcrTextBlock>>()
         val unmatched = mutableListOf<Pair<Int, ChatMessage>>()
@@ -87,7 +91,14 @@ class WechatOcrParser {
             if (matches.size == 1) {
                 grouped.getOrPut(matches.single().index) { mutableListOf() }.add(block)
             } else if (matches.isNotEmpty() || (!isMetadata(block.text) && !isChrome(block.text))) {
-                unmatched += block.bounds.top to ChatMessage(MessageRole.UNKNOWN, block.text, minOf(block.confidence, 0.4f))
+                // A voice message converted to text can expose its glyphs while
+                // the colored bubble or tail is partly hidden by the IME/overlay.
+                // When no bubble claims the text, use the same left/right rule as
+                // ordinary OCR. Ambiguous overlaps remain UNKNOWN on purpose.
+                val fallbackRole = if (matches.isEmpty()) inferRole(block, screenWidth) else MessageRole.UNKNOWN
+                val confidence = if (fallbackRole == MessageRole.UNKNOWN) minOf(block.confidence, 0.4f)
+                else minOf(block.confidence, 0.72f)
+                unmatched += block.bounds.top to ChatMessage(fallbackRole, block.text, confidence)
             }
         }
         val messages = grouped.map { (index, lines) ->
@@ -95,8 +106,9 @@ class WechatOcrParser {
             val ordered = lines.sortedWith(compareBy({ it.bounds.top }, { it.bounds.left }))
             val text = ordered.map { it.text }.reduce { first, second -> first + separator(first, second) + second }
             val confidence = ordered.map { it.confidence }.average().toFloat()
-            ordered.first().bounds.top to ChatMessage(bubble.role, text,
-                if (bubble.role == MessageRole.UNKNOWN) minOf(confidence, 0.4f) else confidence)
+            val role = bubble.role.takeKnownOr { inferRole(bubble.bounds, screenWidth) }
+            ordered.first().bounds.top to ChatMessage(role, text,
+                if (role == MessageRole.UNKNOWN) minOf(confidence, 0.4f) else confidence)
         }
         val attachments = media.map { it.bounds.top to ChatMessage(it.role, "[图片]", if (it.role == MessageRole.UNKNOWN) .4f else .9f) }
         return (messages + unmatched + attachments).sortedBy { it.first }.map { it.second }
@@ -118,10 +130,12 @@ class WechatOcrParser {
 
     private fun ScreenRect.centerY(): Int = top + (bottom - top) / 2
 
-    private fun inferRole(block: OcrTextBlock, screenWidth: Int): MessageRole {
-        val left = block.bounds.left.toFloat() / screenWidth
-        val right = block.bounds.right.toFloat() / screenWidth
-        val center = block.bounds.centerX.toFloat() / screenWidth
+    private fun inferRole(block: OcrTextBlock, screenWidth: Int): MessageRole = inferRole(block.bounds, screenWidth)
+
+    private fun inferRole(bounds: ScreenRect, screenWidth: Int): MessageRole {
+        val left = bounds.left.toFloat() / screenWidth
+        val right = bounds.right.toFloat() / screenWidth
+        val center = bounds.centerX.toFloat() / screenWidth
         return when {
             left <= OTHER_LEFT_EDGE && right < OTHER_RIGHT_LIMIT -> MessageRole.OTHER
             right >= ME_RIGHT_EDGE && left > ME_LEFT_LIMIT -> MessageRole.ME
@@ -130,6 +144,9 @@ class WechatOcrParser {
             else -> MessageRole.UNKNOWN
         }
     }
+
+    private inline fun MessageRole.takeKnownOr(fallback: () -> MessageRole): MessageRole =
+        if (this == MessageRole.UNKNOWN) fallback() else this
 
     private fun mergeAdjacentLines(
         lines: List<PositionedLine>,

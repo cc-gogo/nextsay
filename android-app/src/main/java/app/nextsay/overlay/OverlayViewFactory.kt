@@ -17,6 +17,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.util.Log
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
@@ -27,6 +28,8 @@ import app.nextsay.ui.RelationshipChoices
 import android.widget.TextView
 import app.nextsay.context.ChatContext
 import android.os.SystemClock
+import android.os.Build
+import android.provider.Settings
 import app.nextsay.R
 
 class OverlayViewFactory(private val context: Context) {
@@ -336,6 +339,20 @@ class OverlayWindow(
     private val onQuickInsert: (ReplyCandidate) -> Unit,
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
+    // MIUI treats accessibility overlays specially while an IME is opening.
+    // When the user grants the ordinary overlay permission, use that layer so
+    // the trigger is independent from the accessibility/IME transition.
+    private var overlayWindowType = preferredWindowType()
+    init {
+        Log.i("NextSayOverlay", "window type=$overlayWindowType appOverlay=${overlayWindowType == WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY}")
+    }
+
+    private fun preferredWindowType(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        Settings.canDrawOverlays(service)) {
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+    } else {
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+    }
     private val factory = OverlayViewFactory(service)
     private val trigger = factory.trigger()
     private val copyFeedback = factory.copyFeedback()
@@ -373,7 +390,7 @@ class OverlayWindow(
         touchSlop = ViewConfiguration.get(service).scaledTouchSlop.toFloat(),
         longPressMillis = ViewConfiguration.getLongPressTimeout().toLong(),
     )
-    private val triggerLayoutParams = triggerParams()
+    private var triggerLayoutParams = triggerParams()
     private var triggerAttached = false
     private var panelAttached = false
     private var quickAttached = false
@@ -416,20 +433,39 @@ class OverlayWindow(
     }
 
     fun setSupportedAppActive(active: Boolean) {
+        Log.d("NextSayOverlay", "setSupportedAppActive active=$active attached=$triggerAttached viewAttached=${trigger.isAttachedToWindow}")
         if (active) {
+            val preferredType = preferredWindowType()
+            if (preferredType != overlayWindowType) {
+                Log.i("NextSayOverlay", "switching window type $overlayWindowType -> $preferredType")
+                hideAllContent()
+                if (triggerAttached) windowManager.removeViewImmediate(trigger)
+                triggerAttached = false
+                overlayWindowType = preferredType
+                triggerLayoutParams = triggerParams()
+            }
             // Some ROMs can remove an accessibility overlay without notifying
             // the service. The boolean alone then becomes stale and prevents
             // the trigger from ever being added again.
-            if (!triggerAttached || !trigger.isAttachedToWindow) {
+            if (!trigger.isAttachedToWindow) {
+                // WindowManager may remove a view without notifying us. The
+                // actual attachment is authoritative; never add an attached
+                // view a second time, even if the boolean is stale.
                 triggerAttached = false
                 restoreTriggerPosition()
-                windowManager.addView(trigger, triggerLayoutParams)
-                triggerAttached = true
-            }
+                try {
+                    windowManager.addView(trigger, triggerLayoutParams)
+                    triggerAttached = true
+                    Log.d("NextSayOverlay", "trigger attached type=$overlayWindowType x=${triggerLayoutParams.x} y=${triggerLayoutParams.y}")
+                } catch (error: RuntimeException) {
+                    Log.e("NextSayOverlay", "add trigger failed", error)
+                }
+            } else triggerAttached = true
         } else if (!active) {
             hideAllContent()
-            if (triggerAttached) {
-                windowManager.removeView(trigger)
+            if (triggerAttached || trigger.isAttachedToWindow) {
+                Log.d("NextSayOverlay", "removing trigger because supported app became inactive")
+                windowManager.removeViewImmediate(trigger)
                 triggerAttached = false
             }
         }
@@ -516,8 +552,10 @@ class OverlayWindow(
         if (!quickAttached) {
             windowManager.addView(quick.root, quickParams())
             quickAttached = true
+            anchorQuickToTrigger()
+        } else {
+            constrainQuickPosition()
         }
-        constrainQuickPosition()
     }
 
     fun render(state: OverlayState) = renderAdvanced(state)
@@ -754,6 +792,26 @@ class OverlayWindow(
         if (updateEvenIfUnchanged || oldX != params.x || oldY != params.y) windowManager.updateViewLayout(quick.root, params)
     }
 
+    private fun anchorQuickToTrigger() {
+        if (!quickAttached) return
+        val params = quick.root.layoutParams as WindowManager.LayoutParams
+        val width = params.width.takeIf { it > 0 } ?: minOf(QUICK_WIDTH_DP.dp, (screenWidth - 24.dp).coerceAtLeast(1))
+        val height = quick.root.height.takeIf { it > 0 } ?: QUICK_MIN_VISIBLE_HEIGHT_DP.dp
+        params.x = if (triggerLayoutParams.x > screenWidth / 2) {
+            triggerLayoutParams.x - width - QUICK_GAP_DP.dp
+        } else {
+            triggerLayoutParams.x + TRIGGER_SIZE_DP.dp + QUICK_GAP_DP.dp
+        }.coerceIn(0, (screenWidth - width).coerceAtLeast(0))
+        val limit = (screenHeight * .70f).toInt().coerceAtLeast(1)
+        quick.setMaximumHeight(limit)
+        params.y = (triggerLayoutParams.y - QUICK_VERTICAL_OFFSET_DP.dp).coerceIn(
+            floatingTop,
+            maxOf(floatingTop, floatingBottom - minOf(height, limit)),
+        )
+        windowManager.updateViewLayout(quick.root, params)
+        constrainQuickPosition(updateEvenIfUnchanged = true)
+    }
+
     private fun restoreTriggerPosition() {
         val position = OverlayPosition.fromFractions(
             positionStore.load(),
@@ -778,12 +836,9 @@ class OverlayWindow(
     private fun triggerParams() = WindowManager.LayoutParams(
         TRIGGER_SIZE_DP.dp,
         TRIGGER_SIZE_DP.dp,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        overlayWindowType,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            // Keep the trigger in a stable layer when Xiaomi brings up the IME.
-            // This does not take input focus because NOT_FOCUSABLE remains set.
-            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
@@ -795,10 +850,9 @@ class OverlayWindow(
     private fun quickParams() = WindowManager.LayoutParams(
         minOf(QUICK_WIDTH_DP.dp, (screenWidth - 24.dp).coerceAtLeast(1)),
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        overlayWindowType,
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
@@ -811,14 +865,17 @@ class OverlayWindow(
         } else {
             triggerLayoutParams.x + TRIGGER_SIZE_DP.dp + QUICK_GAP_DP.dp
         }.coerceIn(0, (screenWidth - width).coerceAtLeast(0))
-        y = triggerLayoutParams.y.coerceIn(floatingTop, maxOf(floatingTop, floatingBottom - QUICK_MIN_VISIBLE_HEIGHT_DP.dp))
+        y = (triggerLayoutParams.y - QUICK_VERTICAL_OFFSET_DP.dp).coerceIn(
+            floatingTop,
+            maxOf(floatingTop, floatingBottom - QUICK_MIN_VISIBLE_HEIGHT_DP.dp),
+        )
     }
 
     @Suppress("DEPRECATION")
     private fun instructionEditorParams() = WindowManager.LayoutParams(
         minOf(320.dp, (screenWidth - 32.dp).coerceAtLeast(1)),
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        overlayWindowType,
         // Modal: outside touches cannot race a focus handoff into the chat.
         WindowManager.LayoutParams.FLAG_DIM_BEHIND,
         PixelFormat.TRANSLUCENT,
@@ -832,7 +889,7 @@ class OverlayWindow(
     private fun copyFeedbackParams(width: Int, height: Int) = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        overlayWindowType,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -857,7 +914,7 @@ class OverlayWindow(
     private fun panelParams() = WindowManager.LayoutParams(
         WindowManager.LayoutParams.MATCH_PARENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        overlayWindowType,
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT,
     ).apply {
@@ -872,7 +929,8 @@ class OverlayWindow(
     private companion object {
         const val TRIGGER_SIZE_DP = 52
         const val QUICK_WIDTH_DP = 280
-        const val QUICK_GAP_DP = 8
+        const val QUICK_GAP_DP = 4
+        const val QUICK_VERTICAL_OFFSET_DP = 12
         const val QUICK_MIN_VISIBLE_HEIGHT_DP = 180
         const val COPY_FEEDBACK_GAP_DP = 8
         const val COPY_FEEDBACK_DURATION_MS = 800L

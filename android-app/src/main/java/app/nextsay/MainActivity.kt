@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
@@ -29,6 +30,8 @@ class MainActivity : Activity() {
     private lateinit var diagnosticsStatus: TextView
     private lateinit var accessibilityStatus: TextView
     private lateinit var accessibilityButton: Button
+    private lateinit var overlayStatus: TextView
+    private lateinit var overlayButton: Button
     private lateinit var imeStatus: TextView
     private lateinit var imeButton: Button
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,6 +43,12 @@ class MainActivity : Activity() {
         ui.add(assistant, accessibilityStatus, 16)
         accessibilityButton = ui.button("开启聊天助手", primary = true) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         ui.add(assistant, accessibilityButton, 12)
+        overlayStatus = ui.text("正在检查悬浮窗权限…", 14f, tint = ui.muted)
+        ui.add(assistant, overlayStatus, 8)
+        overlayButton = ui.button("允许稳定显示悬浮球") {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        }
+        ui.add(assistant, overlayButton, 8)
         ui.add(assistant, ui.text("在微信或 QQ 中，点悬浮球展开或收起候选；点“生成新回复”刷新，长按设置。", 13f, tint = ui.muted), 12)
 
         val contacts = ui.section(root, "聊天对象", "关系、补充资料与长期记忆，让回复更符合你们的相处方式。")
@@ -78,6 +87,14 @@ class MainActivity : Activity() {
         accessibilityStatus.text = if (enabled) "聊天助手已开启" else "还差一步：开启无障碍服务"
         accessibilityStatus.setTextColor(if (enabled) ui.accent else ui.muted)
         accessibilityButton.text = if (enabled) "管理聊天助手" else "开启聊天助手"
+        val overlayAllowed = Settings.canDrawOverlays(this)
+        overlayStatus.text = if (overlayAllowed) {
+            "悬浮窗权限已开启，键盘打开时保持显示"
+        } else {
+            "建议开启悬浮窗权限，避免小米输入法收起悬浮球"
+        }
+        overlayStatus.setTextColor(if (overlayAllowed) ui.accent else ui.muted)
+        overlayButton.text = if (overlayAllowed) "管理悬浮窗权限" else "允许稳定显示悬浮球"
         val imeEnabled = isNextSayImeEnabled()
         imeStatus.text = if (imeEnabled) "NextSay 输入法已启用" else "尚未启用，不影响悬浮窗生成"
         imeStatus.setTextColor(if (imeEnabled) ui.accent else ui.muted)
