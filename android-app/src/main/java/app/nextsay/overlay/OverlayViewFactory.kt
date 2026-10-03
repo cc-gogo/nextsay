@@ -777,6 +777,9 @@ class OverlayWindow(
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
+        // Xiaomi may attach accessibility overlays to the IME during its
+        // resize animation unless this is explicit. Keep the trigger fixed.
+        softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
     }
 
     private fun quickParams() = WindowManager.LayoutParams(
@@ -787,6 +790,9 @@ class OverlayWindow(
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
+        // Candidate content must stay in its own screen position while the
+        // chat input method opens underneath it.
+        softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         val width = minOf(QUICK_WIDTH_DP.dp, (screenWidth - 24.dp).coerceAtLeast(1))
         x = if (triggerLayoutParams.x > screenWidth / 2) {
             triggerLayoutParams.x - width - QUICK_GAP_DP.dp

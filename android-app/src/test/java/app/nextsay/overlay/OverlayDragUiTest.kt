@@ -63,6 +63,15 @@ class OverlayDragUiTest {
         assertEquals(before + 80, (quick.root.layoutParams as WindowManager.LayoutParams).y)
         assertEquals("至少50字", overlay.quickInstructionText)
     }
+
+    @Test fun triggerAndCandidatesDoNotAdoptImeResizePolicy() = fixture { overlay, trigger, quick, _ ->
+        val triggerParams = trigger.layoutParams as WindowManager.LayoutParams
+        val quickParams = quick.root.layoutParams as WindowManager.LayoutParams
+        assertEquals(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+            triggerParams.softInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)
+        assertEquals(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+            quickParams.softInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)
+    }
     @Test fun draggingToTopKeepsCandidateWindowBelowChatHeader() = fixture { overlay, trigger, quick, _ ->
         drag(trigger, 0f, -800f)
         assertTrue(overlay.isQuickOpen)
