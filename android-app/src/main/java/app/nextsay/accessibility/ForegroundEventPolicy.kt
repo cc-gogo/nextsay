@@ -24,14 +24,22 @@ class ForegroundEventPolicy {
         ownPackage: String,
         defaultImePackage: String?,
         supportedPackages: Set<String>,
-    ): Boolean = activePackage != null &&
-        activePackage in supportedPackages &&
-        resolvedForeground == null &&
-        (eventPackage == ownPackage || eventPackage == defaultImePackage ||
+    ): Boolean {
+        val inputMethodEvent = eventPackage == ownPackage || eventPackage == defaultImePackage ||
             eventPackage == "com.android.systemui" || eventPackage?.endsWith(".systemui") == true ||
             eventPackage?.contains("inputmethod", ignoreCase = true) == true ||
             eventPackage?.contains("input_", ignoreCase = true) == true ||
-            eventPackage?.contains("keyboard", ignoreCase = true) == true)
+            eventPackage?.contains("keyboard", ignoreCase = true) == true
+        // Some ROMs report a transient package that is neither the saved IME
+        // nor SystemUI while the keyboard is attaching. If the resolver still
+        // sees the supported chat as the real application foreground, this is
+        // still an input/layout transition rather than leaving the chat.
+        val supportedForeground = resolvedForeground in supportedPackages
+        return activePackage != null &&
+            activePackage in supportedPackages &&
+            (inputMethodEvent || supportedForeground) &&
+            (resolvedForeground == null || supportedForeground)
+    }
 
     fun shouldScheduleRefresh(
         eventPackage: String?,

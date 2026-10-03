@@ -191,6 +191,34 @@ class ForegroundEventPolicyTest {
     }
 
     @Test
+    fun `keeps the active chat when Xiaomi keyboard leaves WeChat as resolved foreground`() {
+        assertTrue(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.miui.inputmethod",
+                resolvedForeground = "com.tencent.mm",
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.iflytek.inputmethod.miui",
+                supportedPackages = setOf("com.tencent.mm"),
+            ),
+        )
+    }
+
+    @Test
+    fun `keeps the active chat for an unknown transition package when chat remains foreground`() {
+        assertTrue(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.miui.some_transient_window",
+                resolvedForeground = "com.tencent.mm",
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.baidu.input_mi",
+                supportedPackages = setOf("com.tencent.mm"),
+            ),
+        )
+    }
+
+    @Test
     fun `does not keep the chat when the user really leaves to the launcher`() {
         assertFalse(
             policy.shouldKeepActiveDuringTransientWindow(

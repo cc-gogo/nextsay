@@ -123,6 +123,7 @@ class NextSayAccessibilityService : AccessibilityService() {
     private var screenReceiverRegistered = false
     private var imeGenerationJob: Job? = null
     private var advancedGenerationJob: Job? = null
+    private var unsupportedPackageJob: Job? = null
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!::overlay.isInitialized) return
@@ -337,9 +338,16 @@ class NextSayAccessibilityService : AccessibilityService() {
         automaticWatchJob = scope.launch {
             while (true) {
                 delay(4_000L)
-                val pkg = activePackage ?: continue
-                if (pkg !in SUPPORTED_PACKAGES || !isUnlockedInteractive() || resolveForegroundApplicationPackage() != pkg ||
-                    contacts.totalPaused || (overlay.isEditing && !overlay.isQuickOpen) || quickRequestJob?.isActive == true ||
+                if (!isUnlockedInteractive()) continue
+                val resolved = resolveForegroundApplicationPackage()
+                val pkg = (activePackage ?: resolved)?.takeIf { it in SUPPORTED_PACKAGES }
+                    ?: continue
+                if (resolved != pkg) continue
+                if (activePackage == null) activePackage = pkg
+                // Also repairs a window removed by a ROM without a matching
+                // accessibility event, including the IME transition case.
+                overlay.setSupportedAppActive(true)
+                if (contacts.totalPaused || (overlay.isEditing && !overlay.isQuickOpen) || quickRequestJob?.isActive == true ||
                     imeGenerationJob?.isActive == true || advancedGenerationJob?.isActive == true || autoCaptureRunning) continue
                 val enabled = try { withContext(Dispatchers.IO) { currentContact?.entity?.id?.let { contacts.get(it)?.entity?.autoEnabled } == true } }
                     catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -352,7 +360,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         // synthesize one after the accessibility window list settles so the
         // trigger is created immediately.
         scope.launch {
-            repeat(4) { attempt ->
+            repeat(12) { attempt ->
                 delay(if (attempt == 0) 250L else 500L)
                 if (synchronizeCurrentForeground()) return@launch
             }
@@ -413,6 +421,9 @@ class NextSayAccessibilityService : AccessibilityService() {
             // Xiaomi and some other ROMs briefly expose only the IME/system
             // window while the chat input is opening. Keep the trigger and
             // current candidates until the real application window returns.
+            // The ROM may have removed the accessibility window during the
+            // same transition, so reconcile the actual attachment as well.
+            overlay.setSupportedAppActive(true)
             return
         }
         val foregroundPackage = foregroundWindowResolver.resolveEventPackage(
@@ -422,6 +433,8 @@ class NextSayAccessibilityService : AccessibilityService() {
         )
         val supported = foregroundPackage in SUPPORTED_PACKAGES
         if (supported) {
+            unsupportedPackageJob?.cancel()
+            unsupportedPackageJob = null
             val supportedPackage = foregroundPackage!!
             val supportedPackageChanged = activePackage != supportedPackage
             if (supportedPackageChanged) {
@@ -481,19 +494,28 @@ class NextSayAccessibilityService : AccessibilityService() {
                 )
             }
         } else {
-            cancelQuickRequest()
-            cancelImeGeneration()
-            cancelAdvancedGeneration()
-            cancelAutoRefresh()
-            cancelAutomaticGeneration()
-            incomingDetector.reset()
-            automaticRounds.clear()
-            currentContact = null
-            currentCapture = null
-            latestContextCache.clear()
-            activePackage = null
-            controller.dismiss()
-            overlay.setSupportedAppActive(false)
+            // Xiaomi briefly reports the launcher or an unknown window while
+            // attaching the IME. Defer teardown until the foreground remains
+            // unsupported after the transition settles.
+            unsupportedPackageJob?.cancel()
+            unsupportedPackageJob = scope.launch {
+                delay(350L)
+                val settled = resolveForegroundApplicationPackage()
+                if (settled in SUPPORTED_PACKAGES) return@launch
+                cancelQuickRequest()
+                cancelImeGeneration()
+                cancelAdvancedGeneration()
+                cancelAutoRefresh()
+                cancelAutomaticGeneration()
+                incomingDetector.reset()
+                automaticRounds.clear()
+                currentContact = null
+                currentCapture = null
+                latestContextCache.clear()
+                activePackage = null
+                controller.dismiss()
+                overlay.setSupportedAppActive(false)
+            }
         }
     }
 
@@ -541,6 +563,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         cancelAdvancedGeneration()
         automaticGenerationJob?.cancel()
         automaticWatchJob?.cancel()
+        unsupportedPackageJob?.cancel()
         automaticRounds.clear()
         cancelAutoRefresh()
         latestContextCache.clear()
