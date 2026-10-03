@@ -6,6 +6,43 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DiagnosticFormatterTest {
+    @Test fun selfAutomaticTriggerIsExportedWithoutArbitraryTriggerStrings() {
+        val event = diagnosticEvent(id = "self-safe").copy(triggerReason = "auto_self", captureStage = "ocr_start", durationMillis = 230)
+        val text = DiagnosticFormatter().compact(event)
+        assertTrue(text.contains("auto_self"))
+        assertTrue(text.contains("230ms"))
+        assertFalse(DiagnosticFormatter().export(listOf(event.copy(triggerReason = "私密消息"))).contains("私密消息"))
+    }
+    @Test fun automaticSkipReasonIsVisibleButArbitraryChatContentIsRejected() {
+        val event = Gson().fromJson(Gson().toJson(diagnosticEvent(id = "auto-safe")).dropLast(1) +
+            """, "automaticState":"tail_obscured","keyboardVisible":true,"captureBottom":1420,"pendingIncoming":true}""",
+            DiagnosticEvent::class.java)
+        val text = DiagnosticFormatter().compact(event)
+        assertTrue(text.contains("自动生成状态：tail_obscured"))
+        assertTrue(text.contains("键盘可见：true"))
+        assertTrue(text.contains("读取下边界：1420"))
+        assertTrue(text.contains("待处理消息：true"))
+        val bad = Gson().fromJson(Gson().toJson(event).replace("tail_obscured", "对方的私密聊天"), DiagnosticEvent::class.java)
+        assertFalse(DiagnosticFormatter().export(listOf(bad)).contains("私密聊天"))
+    }
+    @Test fun `header obstruction is exported as safe capture stage without chat text`() {
+        val event = diagnosticEvent(id = "header-test").copy(captureStage = "header_obscured", captureApp = "wechat")
+        assertTrue(DiagnosticFormatter().compact(event).contains("读取环节：header_obscured"))
+    }
+    @Test
+    fun `capture failure includes safe stage and counts but rejects arbitrary strings`() {
+        fun stored(stage: String) = Gson().fromJson(
+            Gson().toJson(diagnosticEvent(id = "capture-test")).dropLast(1) +
+                """, "captureStage":"$stage","captureApp":"qq","captureNodeCount":42,"captureTextCount":0}""",
+            DiagnosticEvent::class.java,
+        )
+        val text = DiagnosticFormatter().compact(stored("ocr_parse"))
+        assertTrue(text.contains("读取环节：ocr_parse"))
+        assertTrue(text.contains("读取应用：qq"))
+        assertTrue(text.contains("控件数量：42"))
+        assertTrue(text.contains("文字块数量：0"))
+        assertFalse(DiagnosticFormatter().export(listOf(stored("private-chat-text"))).contains("private-chat-text"))
+    }
     @Test
     fun `export contains safe provider metadata and error correlation`() {
         val text = DiagnosticFormatter().export(

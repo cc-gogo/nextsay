@@ -18,6 +18,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.widget.doAfterTextChanged
 import app.nextsay.nextSayDependencies
+import app.nextsay.ui.NextSayUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 class ApiSettingsActivity : Activity() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var connectionTestJob: Job? = null
+    private val ui by lazy { NextSayUi(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,48 +43,28 @@ class ApiSettingsActivity : Activity() {
             eventFactory = dependencies.diagnosticEventFactory,
         )
         val initial = controller.state.value
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24.dp, 24.dp, 24.dp, 32.dp)
-            setBackgroundColor(Color.rgb(244, 246, 245))
-        }
-        content.addView(TextView(this).apply {
-            text = "配置模型服务"
-            textSize = 26f
-            setTextColor(Color.rgb(26, 31, 29))
-            fullWidth()
-        })
-        content.addView(TextView(this).apply {
-            text = "填写一套支持 OpenAI Chat Completions 格式的服务。API Key 只会加密保存在这台手机上。"
-            textSize = 15f
-            setTextColor(Color.rgb(72, 82, 78))
-            setPadding(0, 10.dp, 0, 18.dp)
-            fullWidth()
-        })
+        val root = ui.screen(this, "模型服务", "一套配置，供所有聊天对象使用。", back = { finish() })
+        val content = ui.section(root, "连接信息", "支持 OpenAI 兼容格式。API Key 加密保存在本机。")
 
-        val url = EditText(this).apply {
-            hint = "https://api.deepseek.com/v1"
+        val url = ui.field(initial.baseUrl, "https://api.deepseek.com/v1").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setText(initial.baseUrl)
             fullWidth()
         }
-        content.addView(label("API URL"))
-        content.addView(url)
+        ui.add(content, label("API 地址"), 18)
+        ui.add(content, url, 8)
 
-        val apiKey = EditText(this).apply {
-            hint = "API Key"
+        val apiKey = ui.field(initial.apiKey, "输入你的 API Key").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             transformationMethod = PasswordTransformationMethod.getInstance()
             setText(initial.apiKey)
             setSelection(text.length)
             fullWidth()
         }
-        content.addView(label("API Key").apply { setPadding(0, 16.dp, 0, 0) })
-        content.addView(apiKey)
+        ui.add(content, label("API Key"), 18)
+        ui.add(content, apiKey, 8)
         var keyVisible = false
-        content.addView(Button(this).apply {
-            text = "显示 API Key"
+        ui.add(content, ui.button("显示 API Key") {}.apply {
             setOnClickListener {
                 keyVisible = !keyVisible
                 apiKey.transformationMethod = if (keyVisible) null else PasswordTransformationMethod.getInstance()
@@ -90,48 +72,43 @@ class ApiSettingsActivity : Activity() {
                 text = if (keyVisible) "隐藏 API Key" else "显示 API Key"
             }
             fullWidth()
-        })
+        }, 8)
 
-        val model = EditText(this).apply {
-            hint = DEFAULT_PROVIDER_MODEL
+        val model = ui.field(initial.model, DEFAULT_PROVIDER_MODEL).apply {
             inputType = InputType.TYPE_CLASS_TEXT
             setText(initial.model)
             fullWidth()
         }
-        content.addView(label("模型名称").apply { setPadding(0, 16.dp, 0, 0) })
-        content.addView(model)
+        ui.add(content, label("模型名称"), 18)
+        ui.add(content, model, 8)
 
         content.addView(TextView(this).apply {
             text = "对话文字会直接发送到你配置的第三方模型服务，并受该服务隐私政策约束。测试连接会发送一个极小请求，可能消耗可忽略的额度。"
             textSize = 14f
-            setTextColor(Color.rgb(72, 82, 78))
+            setTextColor(ui.muted)
             setPadding(0, 20.dp, 0, 12.dp)
             fullWidth()
         })
-        val status = TextView(this).apply {
+        val status = ui.text("").apply {
             textSize = 15f
             setPadding(0, 8.dp, 0, 8.dp)
             fullWidth()
         }
         content.addView(status)
-        val test = Button(this).apply {
-            text = "测试连接"
+        val test = ui.button("测试连接") {}.apply {
             fullWidth()
         }
-        content.addView(test)
-        val save = Button(this).apply {
-            text = "保存"
+        ui.add(content, test, 10)
+        val save = ui.button("保存配置", primary = true) {}.apply {
             isEnabled = false
             fullWidth()
         }
-        content.addView(save)
-        val copyDiagnostics = Button(this).apply {
-            text = "复制诊断信息"
+        ui.add(content, save, 10)
+        val copyDiagnostics = ui.button("复制诊断信息") {}.apply {
             visibility = View.GONE
             fullWidth()
         }
-        content.addView(copyDiagnostics)
-        setContentView(ScrollView(this).apply { addView(content) })
+        ui.add(content, copyDiagnostics, 10)
 
         url.doAfterTextChanged { controller.updateUrl(it?.toString().orEmpty()) }
         apiKey.doAfterTextChanged { controller.updateApiKey(it?.toString().orEmpty()) }
@@ -159,9 +136,11 @@ class ApiSettingsActivity : Activity() {
             controller.state.collectLatest { state ->
                 test.isEnabled = !state.testing
                 save.isEnabled = state.canSave && !state.testing
+                test.alpha = if (test.isEnabled) 1f else .5f
+                save.alpha = if (save.isEnabled) 1f else .5f
                 status.text = state.status
                 status.setTextColor(
-                    if (state.canSave) Color.rgb(23, 107, 77) else Color.rgb(168, 55, 55),
+                    if (state.canSave) ui.accent else ui.muted,
                 )
                 copyDiagnostics.visibility = if (state.diagnosticId == null) View.GONE else View.VISIBLE
             }
@@ -176,7 +155,7 @@ class ApiSettingsActivity : Activity() {
     private fun label(value: String) = TextView(this).apply {
         text = value
         textSize = 15f
-        setTextColor(Color.rgb(26, 31, 29))
+        setTextColor(ui.ink)
         fullWidth()
     }
 

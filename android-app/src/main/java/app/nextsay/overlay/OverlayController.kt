@@ -28,6 +28,31 @@ class OverlayController(
     val state: StateFlow<OverlayState> = mutableState
     private var generationEpoch = 0L
 
+    fun beginCapture(): Long {
+        dismiss()
+        return generationEpoch
+    }
+
+    // Check for a new reply round without throwing away the visible candidates first.
+    fun beginContextCheck(): Long {
+        generationEpoch += 1
+        return generationEpoch
+    }
+
+    fun stopPendingGeneration() {
+        generationEpoch += 1
+        val current = mutableState.value
+        if (current is OverlayState.Loading) mutableState.value = OverlayState.Preview(current.context)
+    }
+
+    fun isCaptureCurrent(ticket: Long): Boolean = ticket == generationEpoch
+
+    fun completeCapture(ticket: Long, context: ChatContext): Boolean {
+        if (!isCaptureCurrent(ticket)) return false
+        showPreview(context)
+        return true
+    }
+
     fun showPreview(context: ChatContext) {
         generationEpoch += 1
         mutableState.value = OverlayState.Preview(context)
@@ -49,12 +74,12 @@ class OverlayController(
     }
 
     private var lastInstruction = ""
-    private var lastRelationship = "unspecified"
+    private var lastRelationship = ""
     private var lastSurface = DiagnosticSurface.OVERLAY
 
     suspend fun generate(
         instruction: String = "",
-        relationship: String = "unspecified",
+        relationship: String = "",
         surface: DiagnosticSurface = DiagnosticSurface.OVERLAY,
     ) {
         val context = reviewedContext() ?: return

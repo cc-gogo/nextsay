@@ -12,6 +12,6 @@ class ConversationTitleExtractor {
 
     private companion object {
         val QQ_PACKAGES = setOf("com.tencent.mobileqq", "com.tencent.tim", "com.tencent.qqlite")
-        val QQ_TITLE_VIEW_IDS = setOf("304", "32z")
+        val QQ_TITLE_VIEW_IDS = setOf("304", "32z", "34v")
     }
 }

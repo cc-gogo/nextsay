@@ -5,7 +5,21 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AutoRefreshSchedulerTest {
-    private val scheduler = AutoRefreshScheduler()
+    @Test fun ordinaryChangeCanBeReadWithin300msWithoutIgnoringOcrCooldown() {
+        val scheduler = AutoRefreshScheduler()
+        assertEquals(1300L, scheduler.onPageChanged(QQ, 1000L))
+        assertNull(scheduler.consumeDue(1299L))
+        assertEquals(QQ, scheduler.consumeDue(1300L))
+        scheduler.recordWechatOcrStarted(1000L)
+        assertEquals(3000L, scheduler.onPageChanged(WECHAT, 1500L))
+    }
+    @Test fun typingEventsCannotPostponeCaptureForever() {
+        val s = AutoRefreshScheduler()
+        s.onPageChanged(QQ, 0)
+        for (time in 500L..5000L step 500L) s.onPageChanged(QQ, time)
+        assertEquals(QQ, s.consumeDue(5000))
+    }
+    private val scheduler = AutoRefreshScheduler(debounceMillis = 800L)
 
     @Test
     fun `later page event resets the 800 millisecond debounce`() {

@@ -23,6 +23,20 @@ class DiagnosticEventFactory(
         finishReason: String? = null,
         contentState: String? = null,
         reasoningPresent: Boolean? = null,
+        triggerReason: String? = null,
+        memoryIncluded: Boolean? = null,
+        captureStage: String? = null,
+        captureApp: String? = null,
+        captureNodeCount: Int? = null,
+        captureTextCount: Int? = null,
+        automaticState: String? = null,
+        keyboardVisible: Boolean? = null,
+        captureBottom: Int? = null,
+        pendingIncoming: Boolean? = null,
+        visibleMessageCount: Int? = null,
+        latestRole: String? = null,
+        latestConfidence: Float? = null,
+        bubbleCount: Int? = null,
     ): DiagnosticEvent {
         val metadata = metadataProvider.current()
         return DiagnosticEventSanitizer.sanitize(DiagnosticEvent(
@@ -47,6 +61,20 @@ class DiagnosticEventFactory(
             finishReason = finishReason,
             contentState = contentState,
             reasoningPresent = reasoningPresent,
+            triggerReason = triggerReason,
+            memoryIncluded = memoryIncluded,
+            captureStage = captureStage,
+            captureApp = captureApp,
+            captureNodeCount = captureNodeCount,
+            captureTextCount = captureTextCount,
+            automaticState = automaticState,
+            keyboardVisible = keyboardVisible,
+            captureBottom = captureBottom,
+            pendingIncoming = pendingIncoming,
+            visibleMessageCount = visibleMessageCount,
+            latestRole = latestRole,
+            latestConfidence = latestConfidence,
+            bubbleCount = bubbleCount,
         ))
     }
 }

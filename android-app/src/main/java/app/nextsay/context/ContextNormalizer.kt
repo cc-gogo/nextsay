@@ -88,7 +88,7 @@ class ContextNormalizer {
         )
         val TIME_PATTERN = Regex("^(?:今天|昨天)?\\s*(?:[01]?\\d|2[0-3]):[0-5]\\d$")
         val CHAT_CHROME = setOf("返回", "聊天信息", "更多", "发送", "语音", "表情", "相册", "拍摄")
-        val QQ_MESSAGE_VIEW_IDS = setOf("mjh", "mjn")
+        val QQ_MESSAGE_VIEW_IDS = setOf("mjh", "mjn", "mjo")
         const val DUPLICATE_Y_TOLERANCE = 24
     }
 }

@@ -12,6 +12,11 @@ data class ReplyRequestDto(
     val instruction: String,
     val relationship: String,
     val locale: String = "zh-CN",
+    val relationshipRules: String = "",
+    val contactDetails: String = "",
+    val contactPreferences: String = "",
+    val relevantMemory: String = "",
+    val replyMode: String = "natural",
 )
 
 data class ReplyCandidateDto(

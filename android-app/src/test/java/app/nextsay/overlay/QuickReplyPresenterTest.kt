@@ -16,6 +16,27 @@ class QuickReplyPresenterTest {
         confidence = 0.9f,
     )
 
+    @Test fun imageOnlyIncomingMessageExplainsThatItsContentsWereNotRead() {
+        val image = context.copy(messages = listOf(ChatMessage(MessageRole.OTHER, "[图片]", 1f)))
+        val model = presenter.render(OverlayState.Results(image, listOf(ReplyCandidate("brief", "收到图片了")))) as QuickReplyModel.Candidates
+        org.junit.Assert.assertTrue(model.notice.orEmpty().contains("未读取图片内容"))
+    }
+
+    @Test
+    fun `results explain continuation when latest message is self`() {
+        val selfContext = context.copy(messages = context.messages + ChatMessage(MessageRole.ME, "我已回复", 0.9f))
+        val model = presenter.render(OverlayState.Results(selfContext, listOf(ReplyCandidate("brief", "再补充一句")))) as QuickReplyModel.Candidates
+        assertEquals("最后一条是我发的，以下为补充表达", model.notice)
+    }
+
+    @Test
+    fun `advanced results also explain continuation rather than claiming a new incoming turn`() {
+        val selfContext = context.copy(messages = context.messages + ChatMessage(MessageRole.ME, "我已回复", 0.9f))
+        assertEquals("最后一条是我发的，以下为补充表达", OverlayStatusPresenter().render(
+            OverlayState.Results(selfContext, listOf(ReplyCandidate("brief", "再补充一句"))),
+        ))
+    }
+
     @Test
     fun `loading state becomes compact loading card`() {
         assertEquals(QuickReplyModel.Loading("正在生成回复…"), presenter.render(OverlayState.Loading(context)))

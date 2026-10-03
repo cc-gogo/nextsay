@@ -23,11 +23,11 @@ class QuickReplyInteractionTest {
     }
 
     @Test
-    fun `only outside action dismisses the quick window`() {
+    fun `outside action does not dismiss persistent quick window`() {
         val interaction = QuickReplyInteraction()
 
         assertFalse(interaction.shouldDismiss(0))
         assertFalse(interaction.shouldDismiss(1))
-        assertTrue(interaction.shouldDismiss(4))
+        assertFalse(interaction.shouldDismiss(4))
     }
 }

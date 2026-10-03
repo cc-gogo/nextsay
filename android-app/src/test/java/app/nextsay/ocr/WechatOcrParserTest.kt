@@ -9,6 +9,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WechatOcrParserTest {
+    @Test fun `qq left aligned title is recognized without treating lower online status as name`() {
+        val result = WechatOcrParser().parse(listOf(
+            block("测试对象", 175, 104, 310, 166), block("在线 - 4G", 175, 171, 357, 206),
+            block("真实消息", 200, 450, 500, 495),
+        ), 1080, 2400, 2240, sourcePackage = "com.tencent.mobileqq", sourceApp = "qq")
+        assertTrue("QQ header is left aligned, not WeChat centered", result != null)
+        assertEquals("测试对象", result!!.title)
+        assertEquals(listOf("真实消息"), result.context.messages.map { it.text })
+    }
+
+    @Test fun `qq online status alone must not become a persisted contact title`() {
+        val result = WechatOcrParser().parse(listOf(
+            block("在线 - 4G", 175, 171, 357, 206), block("真实消息", 200, 450, 500, 495),
+        ), 1080, 2400, 2240, sourcePackage = "com.tencent.mobileqq", sourceApp = "qq")
+        assertNull(result)
+    }
+
+    @Test fun `qq OCR without role evidence does not label wide self bubbles as incoming`() {
+        val result = WechatOcrParser().parse(listOf(
+            block("QQ好友", 430, 90, 650, 155),
+            block("我已发出的长回复", 180, 450, 900, 495), block("短末行", 180, 510, 350, 555),
+        ), 1080, 2400, 2240, sourcePackage = "com.tencent.mobileqq", sourceApp = "qq")!!
+        assertTrue("Without avatar/bubble evidence QQ text position must not fabricate an incoming turn", result.context.messages.all { it.role == MessageRole.UNKNOWN })
+        assertTrue(result.context.messages.all { it.confidence <= .4f })
+        assertTrue(result.context.confidence <= .4f)
+    }
     private val parser = WechatOcrParser()
 
     @Test

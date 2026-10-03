@@ -23,12 +23,27 @@ object DiagnosticEventSanitizer {
         stackFrames = event.stackFrames.take(40).map { safe(it, frame) },
         finishReason = event.finishReason?.takeIf { it in FINISH_REASONS },
         contentState = event.contentState?.takeIf { it in CONTENT_STATES },
+        triggerReason = event.triggerReason?.takeIf { it in setOf("manual_refresh", "auto_incoming", "auto_self", "ime", "advanced") },
+        captureStage = event.captureStage?.takeIf { it in CAPTURE_STAGES },
+        captureApp = event.captureApp?.takeIf { it in setOf("wechat", "qq") },
+        captureNodeCount = event.captureNodeCount?.takeIf { it in 0..2000 },
+        captureTextCount = event.captureTextCount?.takeIf { it in 0..10000 },
+        automaticState = event.automaticState?.takeIf { it in setOf("tail_obscured", "waiting_other", "uncertain_tail",
+            "baseline_or_unchanged", "pending_editor", "pending_busy", "generating", "generated", "generation_failed", "unverified_frame") },
+        captureBottom = event.captureBottom?.takeIf { it in 1..20000 },
+        visibleMessageCount = event.visibleMessageCount?.takeIf { it in 0..500 },
+        latestRole = event.latestRole?.takeIf { it in setOf("ME", "OTHER", "UNKNOWN") },
+        latestConfidence = event.latestConfidence?.takeIf { it in 0f..1f },
+        bubbleCount = event.bubbleCount?.takeIf { it in 0..500 },
     )
 
     private val FINISH_REASONS = setOf(
         "stop", "length", "tool_calls", "function_call", "content_filter", "insufficient_system_resource",
     )
     private val CONTENT_STATES = setOf("missing", "non_string", "blank", "present")
+    private val CAPTURE_STAGES = setOf("capture_start", "accessibility_start", "accessibility_root", "accessibility_nodes",
+        "accessibility_parse", "password_blocked", "ocr_start", "screenshot", "screenshot_busy", "overlay_moved",
+        "ocr_recognize", "ocr_parse", "header_obscured", "history_merge", "history_save")
 
     private fun safe(value: String, allowed: Regex): String =
         if (allowed.matches(value) && !credentialMarker.containsMatchIn(value)) value else "[redacted]"

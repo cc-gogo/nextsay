@@ -1,116 +1,108 @@
 # NextSay（下一句）
 
-NextSay 是一个 Android 11+ 聊天回复助手。用户在微信或 QQ 中主动点击浮动按钮，NextSay 获取当前可见上下文，并直接调用用户自己配置的 OpenAI 兼容模型服务生成三条回复候选。点击候选只会写入当前输入框，消息始终由用户亲自发送。
+NextSay 是一款运行在 Android 手机上的聊天回复助手。它在微信、QQ、TIM 等聊天页面中读取当前可见内容，在手机本地完成 OCR 和消息归属判断，再调用用户自己填写的 OpenAI 兼容 API 生成回复候选。
 
-安装完成后，NextSay 不需要电脑、ADB 连接或 NextSay 服务器。手机通过自己的 Wi-Fi 或移动数据直接访问用户填写的 API 地址。
+NextSay 只生成候选，不代替用户发送消息。用户可以选择候选并写入聊天输入框，检查无误后手动发送。
 
-## 当前能力
+> 本项目为“源码公开、非商业许可”，不是 OSI 定义的宽松开源许可证。使用、复制、修改或再发布前，请阅读 [LICENSE](LICENSE)。
 
-- 支持微信 `com.tencent.mm`、QQ、TIM 和 QQ 轻聊版包名白名单。
-- QQ/TIM 优先通过 Android 无障碍节点读取当前可见纯文字；节点为空时回退本地 OCR。
-- 微信聊天页变化时可能自动截取单帧屏幕，并通过随 APK 打包的中文 OCR 模型在本机识别；点击浮球也会触发更新。
-- 原始截图只存在内存中，识别完成后立即释放，不保存、不上传。
-- 按聊天标题隔离并加密保存本地文字历史，再通过连续消息重叠追加新内容。
-- 在本机过滤时间、聊天页控件、重复文本和当前草稿。
-- 根据消息水平位置推断 `me`、`other` 或低置信度 `unknown`。
-- 上传前遮盖大陆手机号、邮箱和 8 位以上连续数字。
-- 点击浮球即授权本次识别文字自动上传并生成回复；面板会显示本次使用的具体上下文。
-- 每位用户在手机上填写自己的一套 API URL、API Key 和模型名称；API Key 使用 Android Keystore 加密保存。
-- 支持 OpenAI 兼容的 `POST /chat/completions` 接口，并可先发送极小请求测试连接。
-- 本机诊断日志可复制或导出，无需 ADB，且不记录 API Key、对话正文、提示词、草稿、候选回复或网络正文。
-- 仓库中的 FastAPI 后端仅保留为可选的旧版/代理基础设施，不是 Android 默认路径。
-- 候选写入使用 `ACTION_SET_TEXT`，没有寻找发送按钮或自动发送代码。
+## 功能
 
-当前的消息位置规则是干净实现的通用启发式。微信和 QQ 会随版本改变无障碍节点结构，因此商用前必须用脱敏真机节点样本补充适配和回归测试。
+- 支持微信、QQ、TIM 和 QQ 轻聊版的可见聊天页面。
+- 支持手动生成，也支持按聊天对象开启自动生成候选。
+- 可为不同聊天对象设置关系：普通、领导、老师、客户、同事、朋友、家人、恋人等。
+- 可为对象填写称呼、性格、相处背景、回复偏好等补充资料。
+- 每个聊天对象拥有独立的长期记忆和历史上下文。
+- 恋人关系支持自然风格和黄毛风格等内置回复模式。
+- 微信使用本机 OCR，并结合气泡颜色、位置和箭头方向判断消息来自哪一方；图片消息单独处理。
+- QQ/TIM 优先使用无障碍节点读取文字，必要时回退到本机 OCR。
+- 支持一套用户自己的 OpenAI 兼容 API URL、API Key 和模型配置。
+- API Key 使用 Android Keystore 加密保存，不需要部署公网服务器。
+- 诊断日志只保存在手机本地，可复制或导出，不记录 API Key、聊天原文或模型回答正文。
+- 候选写入输入框后仍由用户确认和发送，不自动点击发送按钮。
 
-## 项目结构
+## 界面展示
 
-```text
-nextsay/
-|-- android-app/      Android 原生 Kotlin 应用、无障碍浮窗和 JVM 测试
-|-- backend/          FastAPI 服务、模型 Provider 和 pytest 测试
-|-- docs/             MVP 设计规格与实施计划
-|-- gradlew.bat       Windows Gradle Wrapper
-`-- README.md
-```
+### 对象关系与补充资料
 
-## 首次使用
+每个聊天对象可以独立设置关系和背景资料，让生成结果更贴合实际相处方式。
+
+![对象关系与补充资料](docs/images/01-object-profile.jpg)
+
+### 主界面与模型配置
+
+主界面集中管理聊天助手、聊天对象和用户自己的模型服务配置。
+
+![主界面与模型配置](docs/images/02-main-screen.jpg)
+
+### 候选回复浮窗
+
+在聊天页面上通过悬浮窗查看多条候选，选择后写入输入框。
+
+![候选回复浮窗](docs/images/03-reply-overlay.jpg)
+
+### 聊天页面中的悬浮回复
+
+悬浮候选会保留在聊天页面上方，不改变原聊天记录，也不会替用户发送。
+
+![聊天页面中的悬浮回复](docs/images/04-chat-overlay.jpg)
+
+## 使用前提
+
+- Android 11 或更高版本。
+- 手机需要开启 NextSay 无障碍服务；如使用输入法写入候选，也需要启用 NextSay 输入法。
+- 手机可以通过 Wi-Fi 或移动数据访问用户配置的模型 API。
+- 每位用户自行填写自己的 API URL、API Key 和模型名称；项目作者不提供共享密钥。
+
+## 快速开始
 
 1. 安装并打开 NextSay。
-2. 打开“配置模型服务”。
-3. 填写 OpenAI 兼容 API 地址、自己的 API Key 和模型名称。
-4. 点击“测试连接”；成功后点击“保存”。
-5. 开启无障碍服务或 NextSay 输入法后使用。
-6. 报错时打开“诊断日志”，复制或导出文件用于排查。
+2. 打开“配置模型服务”，填写 OpenAI 兼容 API 地址、自己的 API Key 和模型名称。
+3. 点击“测试连接”，成功后保存配置。
+4. 开启 NextSay 无障碍服务。
+5. 在微信或 QQ 的一对一聊天中打开悬浮球，手动生成或为聊天对象开启自动生成。
+6. 选择候选写入输入框，检查后由用户手动发送。
 
-例如，API 地址可以填写服务商给出的基础地址（如 `https://api.example.com/v1`），也可以填写完整的 `/chat/completions` 地址。正式版只接受 HTTPS；调试版允许为本地开发填写 HTTP。
+API 地址支持服务商基础地址或完整的 `/chat/completions` 地址。DeepSeek 官方地址可填写 `https://api.deepseek.com`，模型可填写 `deepseek-flash`。其他服务只要兼容 OpenAI Chat Completions 格式即可。
 
-DeepSeek 官方接口可填写 `https://api.deepseek.com`，新配置的模型默认填写 `deepseek-flash`，不覆盖已保存的自定义模型。连接测试只要求回复 OK，最多允许 1024 个输出 token（不是每次都消耗 1024）；DeepSeek 官方域名的测试和正式生成均设置 `thinking.type=disabled`，优先快速回复，不向其他服务发送这一专用参数。输出被截断时显示 `API-OUTPUT-LIMIT`，不再误报成格式不兼容。
+## 隐私边界
 
-连接测试的 HTTP 等待上限为 10 秒；正式生成的 HTTP 连接等待为 10 秒、读取／完整请求上限为 60 秒，浮窗另有 65 秒总时限用于容纳本机处理。超时日志包含安全异常类型，不保存异常消息；取消操作不会再被包装成普通连接／解析失败。网络质量、设备调度或服务端排队仍可能影响实际耗时，不能保证每次请求成功。
+- 截图只在本机内存中处理，识别完成后释放，不上传原始截图。
+- 只有用户请求生成候选时，识别出的文字、对象资料和必要的本地记忆才会发送到用户配置的模型服务。
+- 微信、QQ 的账号、密码、私有数据库和通知内容不被读取。
+- 聊天历史在本机加密保存；清空功能只删除 NextSay 保存的副本，不影响微信或 QQ 原聊天记录。
+- 模型服务商对发送内容的处理受其自身隐私政策约束，请用户自行确认服务商可信度和费用。
 
-## 可选后端
+## 构建
 
-Android 应用不依赖仓库内的 Python 服务。只有在开发旧版协议或自行搭建代理时，才需要启动它：
-
-```powershell
-$env:NEXTSAY_PROVIDER = "mock"
-$env:NEXTSAY_DEV_TOKEN = "local-dev-token"
-.\.venv\Scripts\python.exe -m uvicorn nextsay_backend.app:app --app-dir backend/src --host 0.0.0.0 --port 8000
-```
-
-健康检查地址是 `http://127.0.0.1:8000/health`。Mock 模式不需要任何模型密钥。
-
-使用真实模型时，在后端环境变量中设置：
-
-```text
-NEXTSAY_PROVIDER=openai
-NEXTSAY_BASE_URL=https://模型服务商地址/v1
-NEXTSAY_MODEL=模型名称
-NEXTSAY_API_KEY=服务端密钥
-NEXTSAY_DEV_TOKEN=随机长令牌
-```
-
-这个后端不是当前 Android BYOK 流程的默认路径。使用 Android App 时，用户自己的密钥只在手机端加密保存，并由 App 直接发送给用户配置的模型服务。
-
-## 构建 Android APK
-
-项目要求 JDK 17、Android SDK 35 和 Build Tools 35。当前仓库的忽略目录中已经准备了便携开发工具；也可以直接用 Android Studio 打开仓库根目录。
+项目使用 Kotlin、Android Gradle Plugin、JDK 17 和 Android SDK 35。
 
 ```powershell
 $env:JAVA_HOME = "D:\agent\codex\nextsay\.tools\jdk17\extracted\jdk-17.0.16+8"
-$env:ANDROID_HOME = "D:\agent\codex\nextsay\.android-sdk"
-.\gradlew.bat :android-app:assembleDebug :android-app:testDebugUnitTest
+.\gradlew.bat :android-app:testDebugUnitTest :android-app:assembleDebug
 ```
 
-生成的调试 APK：
+APK 输出路径：
 
 ```text
 android-app/build/outputs/apk/debug/android-app-debug.apk
 ```
 
-## 使用步骤
+## 项目结构
 
-完成首次配置后，打开微信或 QQ 的一对一纯文字聊天。可以点击屏幕右侧的绿色编辑图标，也可以切换到 NextSay 输入法。NextSay 会识别并展示本次使用的上下文，生成三条候选；选择后只写入输入框，由用户检查并手动发送。
-
-NextSay 会优先使用当前已聚焦的安全输入框；没有焦点时，会选择位置最低的非密码编辑框并请求焦点。写入失败时才显示“复制候选”作为显式备用操作。
-
-## 隐私与安全边界
-
-- 无障碍服务在支持的聊天页变化时会自动在本机读取可见节点，必要时截屏做本机 OCR，并更新本地上下文与加密历史；这一过程不调用模型 API。
-- 只有用户主动生成时，识别后的文字才会直传到用户配置的第三方模型服务，并受该服务隐私政策约束。
-- 微信原始截图不落盘、不进入日志，也不发送给模型服务；只有本机 OCR 得到并经脱敏的文字会在主动生成时发送。
-- 本地历史正文使用 Android Keystore 管理的密钥加密；同名联系人无法可靠自动区分，群聊暂不累计长期历史。
-- 不支持的包、密码字段、缺少可用文字或窗口变化都会拒绝操作。
-- API Key 由 Android Keystore 保护；配置页默认遮盖显示，连接测试成功后才能保存。
-- 诊断日志只包含固定的错误代码、事件 ID、API 域名、模型、HTTP 状态、耗时、安全异常类名和设备版本等安全字段。解析后的响应失败还会记录白名单结束原因、回答状态（缺失／非字符串／空／有内容）及是否包含思考输出，不保存回答、思考正文或原始异常消息。
-- 不含自动点击发送、通知读取、Root、账号、计费或分析功能。无障碍服务开启期间会监听支持应用的页面变化，以更新本地上下文。
-
-## 验证
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest backend\tests -v
-.\gradlew.bat :android-app:testDebugUnitTest :android-app:assembleDebug
+```text
+android-app/  Android 原生应用、悬浮窗、无障碍服务和测试
+backend/      可选的旧版 FastAPI/代理基础设施
+docs/         设计文档、实施记录和展示图片
+releases/     本地构建的调试 APK（如存在）
 ```
 
-真机发布前至少验证 Android 11-13 和 Android 14+，覆盖微信与 QQ 的空草稿、已有草稿、切换聊天、切换应用、断网、模型服务超时、鉴权失败和无障碍关闭场景。
+Android 默认流程不依赖 `backend/`，手机直接访问用户填写的 API 地址。
+
+## 免责声明
+
+本软件按现状提供，不保证对所有 Android、微信、QQ、输入法版本持续兼容。用户必须遵守所在地法律法规、相关平台规则和模型服务商条款，并对自己的 API 费用、聊天内容和发送行为负责。
+
+## 许可
+
+本项目适用仓库根目录下的 [NextSay 非商业源码公开许可协议](LICENSE)。该协议保留著作权和商业授权，不授予商业部署、付费服务、广告变现、SaaS、重新发布 APK 或移除版权声明的权利。第三方依赖仍受其各自许可证约束。

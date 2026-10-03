@@ -26,6 +26,25 @@ class OverlayControllerTest {
     )
 
     @Test
+    fun `collapsing during capture prevents late preview from reopening window`() {
+        val controller = OverlayController { _, _, _, _ -> Result.success(replies()) }
+        val ticket = controller.beginCapture()
+        controller.dismiss()
+        assertTrue(!controller.completeCapture(ticket, context))
+        assertEquals(OverlayState.Idle, controller.state.value)
+    }
+
+    @Test
+    fun `new capture invalidates older capture without discarding current preview`() {
+        val controller = OverlayController { _, _, _, _ -> Result.success(replies()) }
+        val older = controller.beginCapture()
+        val newer = controller.beginCapture()
+        assertTrue(controller.completeCapture(newer, context))
+        assertTrue(!controller.completeCapture(older, context.copy(draft = "旧画面")))
+        assertEquals(OverlayState.Preview(context), controller.state.value)
+    }
+
+    @Test
     fun `capture opens preview and cancel returns idle`() {
         val controller = OverlayController { _, _, _, _ -> Result.success(replies()) }
 

@@ -18,6 +18,18 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ImeReplySessionTest {
+    @Test fun `cancelled request releases the loading UI and allows another request`() = runTest {
+        val deferred = CompletableDeferred<Result<List<ReplyCandidate>>>()
+        val session = readySession(ImeGenerationHandler { deferred.await() })
+        val request = launch { session.requestGeneration() }
+        runCurrent()
+        request.cancel()
+        request.join()
+        assertEquals(ImeReplyState.Ready(WECHAT), session.state.value)
+        session.registerHandler(ImeGenerationHandler { Result.success(replies()) })
+        session.requestGeneration()
+        assertTrue(session.state.value is ImeReplyState.Results)
+    }
     @Test
     fun `supported editor needs a connected accessibility service`() {
         val session = ImeReplySession()

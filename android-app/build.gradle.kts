@@ -12,14 +12,24 @@ android {
         applicationId = "app.nextsay"
         minSdk = 30
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 23
+        versionName = "0.2.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
         buildConfig = true
+    }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2") }
+        unitTests.all {
+            System.getenv("NEXTSAY_ROBOLECTRIC_SDK_DIR")?.let { sdkDir ->
+                it.systemProperty("robolectric.dependency.dir", sdkDir)
+                it.systemProperty("robolectric.offline", "true")
+            }
+        }
     }
 
     compileOptions {
@@ -44,6 +54,12 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1") {
+        // View-state tests use legacy graphics; no desktop native Skia runtime needed.
+        exclude(group = "org.robolectric", module = "nativeruntime-dist-compat")
+    }
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

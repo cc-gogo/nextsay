@@ -14,6 +14,7 @@ enum class ProviderErrorCode(val wireCode: String, val userMessage: String) {
     API_OUTPUT_LIMIT("API-OUTPUT-LIMIT", "模型输出达到上限，未完整返回回答"),
     API_INCOMPATIBLE("API-INCOMPATIBLE", "模型服务返回格式不兼容"),
     CAPTURE_FAILED("APP-CAPTURE", "读取当前对话失败"),
+    CHAT_ROLE_UNKNOWN("CHAT-ROLE-UNKNOWN", "暂时没看清最后一条消息是你还是对方发的。请露出最后一条消息的完整气泡，再点刷新；本次未调用 AI"),
     INSERTION_FAILED("APP-INSERT", "写入输入框失败"),
     APP_INTERNAL("APP-INTERNAL", "NextSay 内部错误"),
 }

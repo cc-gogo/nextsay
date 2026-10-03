@@ -5,6 +5,19 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class ContextNormalizerTest {
+    @Test
+    fun `verified qq mjo messages exclude toolbar and use avatar ownership for wide self replies`() {
+        val context = ContextNormalizer().normalize("com.tencent.mobileqq", listOf(
+            snapshot(text = "测试对象", viewId = "com.tencent.mobileqq:id/34v", left = 175, top = 104, right = 310, bottom = 166),
+            snapshot(text = "在线 - 4G", viewId = "com.tencent.mobileqq:id/j64", left = 175, top = 171),
+            snapshot(text = "对方的问题", viewId = "com.tencent.mobileqq:id/mjo", left = 140, top = 500, right = 500, bottom = 650),
+            snapshot(contentDescription = "测试对象的资料卡", left = 32, top = 510, right = 140, bottom = 618),
+            snapshot(text = "我的长回复横跨聊天页面中部", viewId = "com.tencent.mobileqq:id/mjo", left = 152, top = 1842, right = 940, bottom = 2116),
+            snapshot(contentDescription = "我的资料卡", left = 940, top = 1863, right = 1048, bottom = 1971),
+        ), 1080)
+        assertEquals(listOf("对方的问题", "我的长回复横跨聊天页面中部"), context.messages.map { it.text })
+        assertEquals(listOf(MessageRole.OTHER, MessageRole.ME), context.messages.map { it.role })
+    }
     private val normalizer = ContextNormalizer()
 
     @Test

@@ -24,6 +24,78 @@ import org.junit.Test
 
 class NextSayRepositoryTest {
     @Test
+    fun `saved lover mode reaches the provider for default generation`() = runTest {
+        val client = FakeReplyProviderClient(replies = responseCandidates())
+        val repository = repository(MutableProviderConfigStore(config()), client)
+        val extras = extrasWithMode("lover", "huangmao")
+        assertTrue(repository.generate(context().copy(generationExtras = extras), "", "", DiagnosticSurface.OVERLAY).isSuccess)
+        val payload = com.google.gson.JsonParser.parseString(com.google.gson.Gson().toJson(client.request)).asJsonObject
+        assertTrue(payload.get("replyMode") != null)
+        assertEquals("huangmao", payload.get("replyMode").asString)
+        assertEquals(1, client.generateCalls)
+    }
+
+    @Test
+    fun `stale panel relationship cannot override the managed lover mode`() = runTest {
+        val client = FakeReplyProviderClient(replies = responseCandidates())
+        val repository = repository(MutableProviderConfigStore(config()), client)
+        val extras = extrasWithMode("lover", "huangmao")
+        assertTrue(repository.generate(context().copy(generationExtras = extras), "", "colleague", DiagnosticSurface.OVERLAY).isSuccess)
+        val payload = com.google.gson.JsonParser.parseString(com.google.gson.Gson().toJson(client.request)).asJsonObject
+        assertTrue(payload.get("replyMode") != null)
+        assertEquals("huangmao", payload.get("replyMode").asString)
+        assertEquals("lover", client.request!!.relationship)
+    }
+
+    private fun extrasWithMode(relationship: String, mode: String): app.nextsay.contacts.GenerationExtras {
+        val gson = com.google.gson.Gson()
+        val raw = com.google.gson.JsonParser.parseString(gson.toJson(app.nextsay.contacts.GenerationExtras(relationship))).asJsonObject
+        raw.addProperty("replyMode", mode)
+        return gson.fromJson(raw, app.nextsay.contacts.GenerationExtras::class.java)
+    }
+
+    @Test
+    fun `ordinary fallback cannot discard the managed lover relationship and rules`() = runTest {
+        val client = FakeReplyProviderClient(replies = responseCandidates())
+        val repository = repository(MutableProviderConfigStore(config()), client)
+        val enriched = context().copy(generationExtras = app.nextsay.contacts.GenerationExtras("lover", "恋人规则"))
+        assertTrue(repository.generate(enriched, "", "unspecified", DiagnosticSurface.OVERLAY).isSuccess)
+        assertEquals("lover", client.request!!.relationship)
+        assertEquals("恋人规则", client.request!!.relationshipRules)
+        assertEquals("lover", enriched.generationExtras!!.relationship)
+    }
+
+    @Test
+    fun `local contact identity is omitted and selected profile fields stay bounded and redacted`() = runTest {
+        val client = FakeReplyProviderClient(replies = responseCandidates())
+        val repository = repository(MutableProviderConfigStore(config()), client)
+        val enriched = context().copy(
+            contactId = "private-local-uuid",
+            generationExtras = app.nextsay.contacts.GenerationExtras("lover", "温柔".repeat(500), "联系 13812345678 " + "背景".repeat(800), "自然".repeat(500), "考试".repeat(800)),
+            messages = List(30) { ChatMessage(MessageRole.OTHER, "消息".repeat(200), 1f) },
+        )
+        assertTrue(repository.generate(enriched, "本轮".repeat(800), "", DiagnosticSurface.OVERLAY).isSuccess)
+        val request = client.request!!
+        assertEquals("lover", request.relationship)
+        assertTrue(request.contactDetails.contains("[手机号]"))
+        assertTrue(request.messages.sumOf { it.text.length } + request.draft.length + request.instruction.length + request.relationshipRules.length + request.contactDetails.length + request.contactPreferences.length + request.relevantMemory.length <= 6000)
+        assertTrue(!com.google.gson.Gson().toJson(request).contains("private-local-uuid"))
+        assertTrue(!com.google.gson.Gson().toJson(enriched).contains("private-local-uuid"))
+    }
+    @Test
+    fun `uncertain latest speaker fails locally before sending chat to provider`() = runTest {
+        val client = FakeReplyProviderClient(replies = responseCandidates())
+        val repository = repository(MutableProviderConfigStore(config()), client)
+        val result = repository.generate(
+            context().copy(messages = context().messages + ChatMessage(MessageRole.UNKNOWN, "这一句是谁发的", 0.4f)),
+            "", "unspecified", DiagnosticSurface.OVERLAY,
+        )
+        assertTrue(result.isFailure)
+        assertEquals(0, client.generateCalls)
+        assertEquals(ProviderErrorCode.CHAT_ROLE_UNKNOWN, (result.exceptionOrNull() as ProviderException).code)
+    }
+
+    @Test
     fun `missing configuration fails before provider call`() = runTest {
         val client = FakeReplyProviderClient()
         val repository = repository(MutableProviderConfigStore(null), client)

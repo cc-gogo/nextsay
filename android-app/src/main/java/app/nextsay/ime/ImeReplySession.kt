@@ -78,6 +78,7 @@ class ImeReplySession {
                 },
             )
         } catch (cancelled: CancellationException) {
+            if (matchesCurrentEditor(targetPackage, requestEpoch)) publishAvailability()
             throw cancelled
         } finally {
             requestRunning = false

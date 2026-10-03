@@ -15,52 +15,35 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import app.nextsay.nextSayDependencies
+import app.nextsay.ui.NextSayUi
 import java.io.File
 
 class DiagnosticsActivity : Activity() {
     private lateinit var summary: TextView
+    private val ui by lazy { NextSayUi(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24.dp, 24.dp, 24.dp, 32.dp)
-            setBackgroundColor(Color.rgb(244, 246, 245))
-        }
-        content.addView(TextView(this).apply {
-            text = "诊断日志"
-            textSize = 26f
-            setTextColor(Color.rgb(26, 31, 29))
-            fullWidth()
-        })
+        val root = ui.screen(this, "诊断日志", "出错时，把安全日志分享给我即可排查。", back = { finish() })
+        val content = ui.section(root, "最近一次记录")
         content.addView(TextView(this).apply {
             text = "日志仅保存在本机，不包含 API Key、对话文字、提示词、草稿、候选回复或网络正文。你可以复制最近一条，或导出全部安全事件。"
             textSize = 14f
-            setTextColor(Color.rgb(72, 82, 78))
+            setTextColor(ui.muted)
             setPadding(0, 10.dp, 0, 18.dp)
             fullWidth()
         })
         summary = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.rgb(26, 31, 29))
+            setTextColor(ui.ink)
             setPadding(12.dp, 12.dp, 12.dp, 12.dp)
-            setBackgroundColor(Color.WHITE)
+            background = ui.shape(ui.inset, 12)
             fullWidth()
         }
         content.addView(summary)
-        content.addView(Button(this).apply {
-            text = "复制诊断信息"
-            setOnClickListener { copyNewest() }
-            fullWidth()
-        })
-        content.addView(Button(this).apply {
-            text = "导出诊断日志"
-            setOnClickListener { exportAll() }
-            fullWidth()
-        })
-        content.addView(Button(this).apply {
-            text = "清除诊断日志"
+        ui.add(content, ui.button("复制诊断信息") { copyNewest() }, 12)
+        ui.add(content, ui.button("导出诊断日志", primary = true) { exportAll() }, 10)
+        ui.add(content, ui.button("清除诊断日志", destructive = true) {}.apply {
             setOnClickListener {
                 val dependencies = nextSayDependencies
                 val reportsCleared = dependencies.diagnosticExportManager.clearCachedExports(
@@ -76,8 +59,7 @@ class DiagnosticsActivity : Activity() {
                 Toast.makeText(this@DiagnosticsActivity, message, Toast.LENGTH_SHORT).show()
             }
             fullWidth()
-        })
-        setContentView(ScrollView(this).apply { addView(content) })
+        }, 10)
         refresh()
     }
 

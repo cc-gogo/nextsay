@@ -5,6 +5,10 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ConversationTitleExtractorTest {
+    @Test fun `verified qq 34v header is recognized instead of online status`() {
+        assertEquals("测试对象", ConversationTitleExtractor().extract("com.tencent.mobileqq", listOf(
+            node("测试对象", "com.tencent.mobileqq:id/34v"), node("在线 - 4G", "com.tencent.mobileqq:id/j64"))))
+    }
     private val extractor = ConversationTitleExtractor()
 
     @Test

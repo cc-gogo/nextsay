@@ -17,6 +17,7 @@ import java.io.File
 import okhttp3.OkHttpClient
 
 class AppDependencies(context: Context) {
+    val contactStore = app.nextsay.contacts.ContactStore(context.applicationContext)
     private val gson = Gson()
 
     val providerConfigStore = SharedPreferencesProviderConfigStore(

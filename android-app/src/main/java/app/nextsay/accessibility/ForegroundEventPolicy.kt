@@ -1,6 +1,12 @@
 package app.nextsay.accessibility
 
+import android.view.accessibility.AccessibilityEvent
+
 class ForegroundEventPolicy {
+    fun shouldInvalidateContext(eventType: Int, supportedPackageChanged: Boolean): Boolean =
+        supportedPackageChanged || eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
     fun shouldIgnore(
         eventPackage: String?,
         defaultImePackage: String?,
@@ -14,7 +20,11 @@ class ForegroundEventPolicy {
         defaultImePackage: String? = null,
         supportedPackages: Set<String>,
         interactive: Boolean,
-    ): Boolean = interactive &&
+        eventType: Int = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+        contentOpen: Boolean = false,
+        supportedPackageChanged: Boolean = false,
+    ): Boolean = interactive && !contentOpen &&
+        (supportedPackageChanged || eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) &&
         eventPackage != ownPackage &&
         eventPackage != defaultImePackage &&
         eventPackage == foregroundPackage &&

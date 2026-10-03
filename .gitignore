@@ -11,3 +11,4 @@ __pycache__/
 .kotlin/
 local.properties
 **/build/
+releases/
