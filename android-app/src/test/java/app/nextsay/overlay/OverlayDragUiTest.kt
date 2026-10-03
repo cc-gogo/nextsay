@@ -72,6 +72,16 @@ class OverlayDragUiTest {
         assertEquals(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
             quickParams.softInputMode and WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)
     }
+
+    @Test fun supportedAppReattachesTriggerAfterSystemRemovedItsWindow() = fixture { overlay, trigger, _, _ ->
+        val windowManager = field(overlay, "windowManager") as WindowManager
+        windowManager.removeView(trigger)
+        assertFalse("Test must simulate the system removing the trigger window", registered(overlay, trigger))
+
+        overlay.setSupportedAppActive(true)
+
+        assertTrue("A stale attachment flag must not hide the trigger permanently", registered(overlay, trigger))
+    }
     @Test fun draggingToTopKeepsCandidateWindowBelowChatHeader() = fixture { overlay, trigger, quick, _ ->
         drag(trigger, 0f, -800f)
         assertTrue(overlay.isQuickOpen)

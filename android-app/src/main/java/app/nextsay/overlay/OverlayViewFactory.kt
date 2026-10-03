@@ -416,10 +416,16 @@ class OverlayWindow(
     }
 
     fun setSupportedAppActive(active: Boolean) {
-        if (active && !triggerAttached) {
-            restoreTriggerPosition()
-            windowManager.addView(trigger, triggerLayoutParams)
-            triggerAttached = true
+        if (active) {
+            // Some ROMs can remove an accessibility overlay without notifying
+            // the service. The boolean alone then becomes stale and prevents
+            // the trigger from ever being added again.
+            if (!triggerAttached || !trigger.isAttachedToWindow) {
+                triggerAttached = false
+                restoreTriggerPosition()
+                windowManager.addView(trigger, triggerLayoutParams)
+                triggerAttached = true
+            }
         } else if (!active) {
             hideAllContent()
             if (triggerAttached) {

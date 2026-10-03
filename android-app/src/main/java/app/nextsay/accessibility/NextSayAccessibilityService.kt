@@ -347,6 +347,31 @@ class NextSayAccessibilityService : AccessibilityService() {
                 if (enabled) scheduleCurrentRefresh()
             }
         }
+        // A service can be rebound while a supported app is already in the
+        // foreground. In that case no new window-state event is guaranteed;
+        // synthesize one after the accessibility window list settles so the
+        // trigger is created immediately.
+        scope.launch {
+            repeat(4) { attempt ->
+                delay(if (attempt == 0) 250L else 500L)
+                if (synchronizeCurrentForeground()) return@launch
+            }
+        }
+    }
+
+    private fun synchronizeCurrentForeground(): Boolean {
+        if (!::overlay.isInitialized) return false
+        val packageName = resolveForegroundApplicationPackage()
+            ?.takeIf { it in SUPPORTED_PACKAGES }
+            ?: return false
+        val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+        event.packageName = packageName
+        return try {
+            onAccessibilityEvent(event)
+            true
+        } finally {
+            event.recycle()
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
