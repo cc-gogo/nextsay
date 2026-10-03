@@ -342,7 +342,9 @@ class NextSayAccessibilityService : AccessibilityService() {
                 val resolved = resolveForegroundApplicationPackage()
                 val pkg = (activePackage ?: resolved)?.takeIf { it in SUPPORTED_PACKAGES }
                     ?: continue
-                if (resolved != pkg) continue
+                val keyboardTransition = resolved == null &&
+                    windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                if (resolved != pkg && !keyboardTransition) continue
                 if (activePackage == null) activePackage = pkg
                 // Also repairs a window removed by a ROM without a matching
                 // accessibility event, including the IME transition case.
@@ -501,7 +503,9 @@ class NextSayAccessibilityService : AccessibilityService() {
             unsupportedPackageJob = scope.launch {
                 delay(350L)
                 val settled = resolveForegroundApplicationPackage()
-                if (settled in SUPPORTED_PACKAGES) return@launch
+                val keyboardTransition = settled == null &&
+                    windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                if (settled in SUPPORTED_PACKAGES || keyboardTransition) return@launch
                 cancelQuickRequest()
                 cancelImeGeneration()
                 cancelAdvancedGeneration()
