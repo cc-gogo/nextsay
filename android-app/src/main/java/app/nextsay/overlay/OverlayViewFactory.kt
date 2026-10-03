@@ -779,7 +779,11 @@ class OverlayWindow(
         TRIGGER_SIZE_DP.dp,
         TRIGGER_SIZE_DP.dp,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            // Keep the trigger in a stable layer when Xiaomi brings up the IME.
+            // This does not take input focus because NOT_FOCUSABLE remains set.
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
@@ -792,7 +796,9 @@ class OverlayWindow(
         minOf(QUICK_WIDTH_DP.dp, (screenWidth - 24.dp).coerceAtLeast(1)),
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
         PixelFormat.TRANSLUCENT,
     ).apply {
         gravity = Gravity.START or Gravity.TOP
