@@ -15,6 +15,7 @@ class WechatOcrParser {
         sourcePackage: String = WECHAT_PACKAGE,
         sourceApp: String = "wechat",
         bubbles: List<OcrBubble>? = null,
+        fallbackTitle: String? = null,
     ): CapturedConversation? {
         require(screenWidth > 0 && screenHeight > 0) { "screen dimensions must be positive" }
         require(contentBottom in 1..screenHeight) { "contentBottom must be on screen" }
@@ -36,7 +37,7 @@ class WechatOcrParser {
         // QQ puts the contact name above a left-aligned online-status row.
         val titleBlock = (if (isQq) titleCandidates.minByOrNull { it.bounds.top }
             else titleCandidates.maxByOrNull { (it.bounds.right - it.bounds.left) * (it.bounds.bottom - it.bounds.top) })
-            ?: return null
+        val title = titleBlock?.text ?: fallbackTitle?.trim()?.takeIf { it.isNotEmpty() } ?: return null
 
         val messageBlocks = usable.asSequence()
             .filter { it !== titleBlock }
@@ -57,7 +58,7 @@ class WechatOcrParser {
         if (messages.isEmpty()) return null
 
         return CapturedConversation(
-            title = titleBlock.text,
+            title = title,
             context = ChatContext(
                 sourceApp = sourceApp,
                 sourcePackage = sourcePackage,
@@ -65,7 +66,7 @@ class WechatOcrParser {
                 draft = "",
                 confidence = messages.map { it.confidence }.average().toFloat(),
             ),
-            persistable = !GROUP_TITLE_PATTERN.matches(titleBlock.text),
+            persistable = !GROUP_TITLE_PATTERN.matches(title),
         )
     }
 

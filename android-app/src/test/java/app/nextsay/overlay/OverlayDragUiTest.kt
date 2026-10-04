@@ -82,6 +82,17 @@ class OverlayDragUiTest {
 
         assertTrue("A stale attachment flag must not hide the trigger permanently", registered(overlay, trigger))
     }
+
+    @Test fun quickWindowReattachesAfterSystemRemovedItsWindow() = fixture { overlay, _, quick, _ ->
+        val windowManager = field(overlay, "windowManager") as WindowManager
+        windowManager.removeView(quick.root)
+        assertFalse("Test must simulate the system removing the quick window", registered(overlay, quick.root))
+
+        overlay.showQuickError("再次打开")
+
+        assertTrue("A stale quick attachment flag must not block reopening", overlay.isQuickOpen)
+        assertTrue(registered(overlay, quick.root))
+    }
     @Test fun draggingToTopKeepsCandidateWindowBelowChatHeader() = fixture { overlay, trigger, quick, _ ->
         drag(trigger, 0f, -800f)
         assertTrue(overlay.isQuickOpen)

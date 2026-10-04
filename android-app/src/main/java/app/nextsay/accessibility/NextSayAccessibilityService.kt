@@ -72,6 +72,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class NextSayAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -95,6 +96,9 @@ class NextSayAccessibilityService : AccessibilityService() {
     // Accessibility events already carry the package that changed, so keep a
     // lightweight event-driven foreground hint for overlay decisions.
     private var observedForegroundPackage: String? = null
+    // Window bounds are refreshed off the accessibility/main thread. Reading
+    // `windows` synchronously on MIUI has previously blocked for minutes.
+    private var cachedKeyboardTop: Int? = null
     private var captureStage: String? = null
     private var captureApp: String? = null
     private var captureNodeCount: Int? = null
@@ -315,7 +319,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                 val event = dependencies.diagnosticEventFactory.create(
                     DiagnosticEventType.CAPTURE_TIMING, DiagnosticSurface.OVERLAY,
                     durationMillis = duration, captureStage = stage, captureApp = captureApp,
-                    keyboardVisible = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD },
+                    keyboardVisible = cachedKeyboardTop != null,
                 )
                 scope.launch(Dispatchers.IO) { dependencies.diagnostics.record(event) }
             },
@@ -357,9 +361,11 @@ class NextSayAccessibilityService : AccessibilityService() {
                 val resolved = resolveForegroundApplicationPackage()
                 val pkg = (activePackage ?: resolved)?.takeIf { it in SUPPORTED_PACKAGES }
                     ?: continue
-                val keyboardTransition = resolved == null &&
-                    windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-                if (resolved != pkg && !keyboardTransition) continue
+                // A null event-driven hint is common while MIUI swaps the IME.
+                // Keep the last supported package during that short gap; the
+                // teardown path below still removes the overlay when a real
+                // non-supported foreground event settles.
+                if (resolved != null && resolved != pkg) continue
                 if (activePackage == null) activePackage = pkg
                 // Also repairs a window removed by a ROM without a matching
                 // accessibility event, including the IME transition case.
@@ -381,6 +387,22 @@ class NextSayAccessibilityService : AccessibilityService() {
         // appear noticeably late. Keep a short retry window for ROMs whose
         // accessibility window list settles a moment after the callback.
         if (!synchronizeCurrentForeground()) scope.launch {
+            // Rebinding does not always deliver a new window-state event. A
+            // single background lookup repairs that case without putting the
+            // MIUI binder call on the accessibility/main thread.
+            val discovered = withContext(Dispatchers.IO) {
+                withTimeoutOrNull(800L) {
+                    runCatching {
+                        rootInActiveWindow?.let { root ->
+                            try { root.packageName?.toString() } finally { recycleNode(root) }
+                        }
+                    }.getOrNull()
+                }
+            }
+            if (discovered in SUPPORTED_PACKAGES) {
+                observedForegroundPackage = discovered
+                if (synchronizeCurrentForeground()) return@launch
+            }
             repeat(8) { attempt ->
                 delay(if (attempt == 0) 80L else 180L)
                 if (synchronizeCurrentForeground()) return@launch
@@ -427,13 +449,13 @@ class NextSayAccessibilityService : AccessibilityService() {
             return
         }
         val defaultImePackage = defaultInputMethodPackage()
+        if (packageName in SUPPORTED_PACKAGES || packageName == defaultImePackage) refreshKeyboardBoundsAsync()
         when {
             packageName in SUPPORTED_PACKAGES -> observedForegroundPackage = packageName
             packageName == applicationContext.packageName -> observedForegroundPackage = null
             packageName == defaultImePackage || packageName == "com.android.systemui" ||
                 packageName?.endsWith(".systemui") == true -> Unit
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
-                event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED -> observedForegroundPackage = null
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> observedForegroundPackage = null
         }
         // A supported-app or IME event invalidates any stale delayed teardown,
         // even when the foreground policy ignores the event while a panel is open.
@@ -544,9 +566,11 @@ class NextSayAccessibilityService : AccessibilityService() {
                 delay(350L)
                 if (teardownToken != unsupportedTeardownToken) return@launch
                 val settled = resolveForegroundApplicationPackage()
-                val keyboardTransition = settled == null &&
-                    windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-                if (settled in SUPPORTED_PACKAGES || keyboardTransition) return@launch
+                // Do not query windows here. On MIUI that binder call can block
+                // the service for minutes. A supported event arriving during
+                // the delay cancels this job; a null hint is treated as a
+                // transient IME/layout gap and the watch job will reconcile it.
+                if (settled in SUPPORTED_PACKAGES || settled == null) return@launch
                 if (teardownToken != unsupportedTeardownToken) return@launch
                 cancelQuickRequest()
                 cancelImeGeneration()
@@ -759,7 +783,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         nextSayDependencies.diagnostics.record(nextSayDependencies.diagnosticEventFactory.create(
             DiagnosticEventType.AUTOMATIC_STATE, DiagnosticSurface.OVERLAY,
             automaticState = state,
-            keyboardVisible = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD },
+            keyboardVisible = cachedKeyboardTop != null,
             captureBottom = captureBottom,
             pendingIncoming = automaticRounds.hasPending,
             visibleMessageCount = currentCapture?.context?.replyRound?.visibleMessages?.size
@@ -1072,9 +1096,17 @@ class NextSayAccessibilityService : AccessibilityService() {
             delay(CAPTURE_SETTLE_MILLIS)
             val before = overlay.captureExclusions()
             // WeChat message text still comes from OCR; accessibility supplies attachment geometry only.
+            // Node traversal is useful for attachment labels, but it is not
+            // required for OCR text. MIUI can stall the window-root binder;
+            // keep that stall off the service thread and continue with pixels
+            // when it does not answer quickly.
             val mediaNodes = if (packageName == WECHAT_PACKAGE) {
-                findSupportedRoot(packageName)?.let { root ->
-                    try { flattener.flatten(root) } finally { recycleNode(root) }
+                withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(500L) {
+                        findSupportedRoot(packageName)?.let { root ->
+                            try { flattener.flatten(root) } finally { recycleNode(root) }
+                        }.orEmpty()
+                    }
                 }.orEmpty()
             } else emptyList()
             if (mediaNodes.any { it.password }) { captureStage = "password_blocked"; return null }
@@ -1125,6 +1157,10 @@ class NextSayAccessibilityService : AccessibilityService() {
                     sourcePackage = packageName,
                     sourceApp = sourceApp,
                     bubbles = bubbles,
+                    // If the overlay covers the WeChat header, retain the
+                    // last confirmed title so OCR can still return messages.
+                    // A first capture without a title remains a hard failure.
+                    fallbackTitle = currentCapture?.title?.takeIf { currentCapture?.context?.sourcePackage == packageName },
                 )
                 if (captured == null && exclusions.any { Rect.intersects(it,
                         Rect((bitmap.width * .30f).toInt(), (bitmap.height * .025f).toInt(),
@@ -1347,14 +1383,25 @@ class NextSayAccessibilityService : AccessibilityService() {
         else ChatViewportBounds.bottom(screenHeight, keyboardTop, nodes, INPUT_AREA_GUARD_DP.dp)
     }
 
-    private fun visibleKeyboardTop(): Int? = windows.asSequence()
-            .filter { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            .mapNotNull { window ->
-                val region = Region()
-                window.getRegionInScreen(region)
-                region.bounds.takeIf { !it.isEmpty }?.top
+    private fun visibleKeyboardTop(): Int? = cachedKeyboardTop
+
+    private fun refreshKeyboardBoundsAsync() {
+        scope.launch(Dispatchers.IO) {
+            val top = withTimeoutOrNull(250L) {
+                runCatching {
+                    windows.asSequence()
+                        .filter { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+                        .mapNotNull { window ->
+                            val region = Region()
+                            window.getRegionInScreen(region)
+                            region.bounds.takeIf { !it.isEmpty }?.top
+                        }
+                        .minOrNull()
+                }.getOrNull()
             }
-            .minOrNull()
+            withContext(Dispatchers.Main.immediate) { cachedKeyboardTop = top }
+        }
+    }
 
     private fun resolveForegroundApplicationPackage(): String? {
         // Do not call windows/window.root here. On Xiaomi this binder call can

@@ -160,4 +160,18 @@ class WechatBubbleParsingTest {
         assertEquals(MessageRole.OTHER, messages.single().role)
         assertTrue(messages.single().text.contains("发送单"))
     }
+
+    @Test
+    fun `messages remain readable when overlay covers the chat title`() {
+        val captured = WechatOcrParser().parse(
+            blocks = listOf(line("对方的新消息", 180, 450, 520, 500)),
+            screenWidth = 1080,
+            screenHeight = 2400,
+            contentBottom = 2240,
+            bubbles = emptyList(),
+            fallbackTitle = "测试聊天",
+        )!!
+        assertEquals("测试聊天", captured.title)
+        assertEquals("对方的新消息", captured.context.messages.single().text)
+    }
 }

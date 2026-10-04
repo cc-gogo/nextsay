@@ -422,9 +422,17 @@ class OverlayWindow(
         get() = panelAttached
 
     val isAnyContentOpen: Boolean
-        get() = panelAttached || quickAttached || instructionEditorAttached || menu != null
+        get() = panelAttached || quickWindowAttached() || instructionEditorAttached || menu != null
 
-    val isQuickOpen: Boolean get() = quickAttached
+    /**
+     * WindowManager can remove an accessibility overlay without sending a
+     * callback (notably during MIUI IME transitions). The view attachment is
+     * the source of truth; the flag is only an optimization for old ROMs.
+     */
+    val isQuickOpen: Boolean get() = quickWindowAttached()
+
+    private fun quickWindowAttached(): Boolean = quickAttached &&
+        (quick.root.isAttachedToWindow || quick.root.parent != null)
 
     val quickInstructionText: String get() = quick.instructionText
 
@@ -519,14 +527,14 @@ class OverlayWindow(
         cachedQuick = QuickReplyModel.Waiting("等待新消息；可点生成新回复")
         quickSourcePackage = null
         trigger.setImageResource(R.drawable.nextsay_trigger)
-        if (quickAttached) quick.render(cachedQuick)
+        if (quickWindowAttached()) quick.render(cachedQuick)
     }
     fun showGenerationCancelled() {
         cachedQuick = QuickReplyModel.Waiting("已暂停生成；可以手动生成新回复")
         quickSourcePackage = null
-        if (quickAttached) quick.render(cachedQuick)
+        if (quickWindowAttached()) quick.render(cachedQuick)
     }
-    fun resumeQuickPresentation() { if (quickAttached && !isEditing) quick.render(cachedQuick) }
+    fun resumeQuickPresentation() { if (quickWindowAttached() && !isEditing) quick.render(cachedQuick) }
 
     fun showAutomaticStatus(message: String) {
         // Background observation is not a generation result. Never destroy a
@@ -536,7 +544,7 @@ class OverlayWindow(
         // Keep background confirmation separate from the interactive entry model.
         // Replacing Loading here disabled the manual generate button.
         cachedQuick = QuickReplyModel.Waiting(message)
-        if (quickAttached && !isEditing) quick.render(cachedQuick)
+        if (quickWindowAttached() && !isEditing) quick.render(cachedQuick)
     }
 
     fun showQuickError(message: String, diagnosticId: String? = null) {
@@ -549,11 +557,23 @@ class OverlayWindow(
         closePanel()
         quick.render(model)
         quick.root.visibility = if (hiddenForCapture) View.INVISIBLE else View.VISIBLE
-        if (!quickAttached) {
-            windowManager.addView(quick.root, quickParams())
-            quickAttached = true
+        val actuallyAttached = quick.root.isAttachedToWindow || quick.root.parent != null
+        if (!actuallyAttached) {
+            // A stale flag must never prevent re-attaching a window removed by
+            // the system. Reset it before the add so all dependent state sees
+            // the same truth even when WindowManager rejects the operation.
+            quickAttached = false
+            try {
+                windowManager.addView(quick.root, quickParams())
+                quickAttached = true
+            } catch (error: RuntimeException) {
+                Log.e("NextSayOverlay", "add quick window failed", error)
+                quickAttached = quick.root.isAttachedToWindow || quick.root.parent != null
+                return
+            }
             anchorQuickToTrigger()
         } else {
+            quickAttached = true
             constrainQuickPosition()
         }
     }
@@ -579,7 +599,7 @@ class OverlayWindow(
         closeInstructionEditor()
         hiddenForCapture = true
         closeCopyFeedback()
-        if (quickAttached) quick.root.visibility = View.INVISIBLE
+        if (quickWindowAttached()) quick.root.visibility = View.INVISIBLE
         if (panelAttached) panel.root.visibility = View.INVISIBLE
         trigger.visibility = View.INVISIBLE
     }
@@ -587,7 +607,7 @@ class OverlayWindow(
     fun restoreAfterCapture() {
         hiddenForCapture = false
         if (triggerAttached) trigger.visibility = View.VISIBLE
-        if (quickAttached) quick.root.visibility = View.VISIBLE
+        if (quickWindowAttached()) quick.root.visibility = View.VISIBLE
         if (panelAttached) panel.root.visibility = View.VISIBLE
     }
 
@@ -633,7 +653,7 @@ class OverlayWindow(
     }
     /** Screen-space exclusion, without changing any window visibility/focus. */
     fun captureExclusions(): List<Rect> = listOfNotNull(
-        trigger.takeIf { triggerAttached }, quick.root.takeIf { quickAttached },
+        trigger.takeIf { triggerAttached && trigger.isAttachedToWindow }, quick.root.takeIf { quickWindowAttached() },
         panel.root.takeIf { panelAttached }, instructionEditor.root.takeIf { instructionEditorAttached },
         copyFeedback.takeIf { copyFeedbackAttached }, menu,
     ).mapNotNull { view ->
@@ -652,7 +672,16 @@ class OverlayWindow(
 
     private fun closeQuick() {
         closeInstructionEditor()
-        if (quickAttached) windowManager.removeView(quick.root)
+        val attached = quick.root.isAttachedToWindow || quick.root.parent != null
+        if (quickAttached || attached) {
+            try {
+                // Immediate removal avoids a stale touchable window surviving
+                // the next click while MIUI is animating the IME.
+                windowManager.removeViewImmediate(quick.root)
+            } catch (error: RuntimeException) {
+                Log.w("NextSayOverlay", "remove quick window failed", error)
+            }
+        }
         quickAttached = false
     }
 
@@ -663,7 +692,7 @@ class OverlayWindow(
     }
 
     private fun openInstructionEditor() {
-        if (!quickAttached || hiddenForCapture || instructionEditorAttached) return
+        if (!quickWindowAttached() || hiddenForCapture || instructionEditorAttached) return
         windowManager.addView(instructionEditor.root, instructionEditorParams())
         instructionEditorAttached = true
         instructionEditor.begin(quick.instructionText)
@@ -759,7 +788,7 @@ class OverlayWindow(
         triggerLayoutParams.x = (triggerLayoutParams.x + deltaX.toInt()).coerceIn(0, availableWidth)
         triggerLayoutParams.y = (triggerLayoutParams.y + deltaY.toInt()).coerceIn(minOf(floatingTop, availableHeight), availableHeight)
         if (triggerAttached) windowManager.updateViewLayout(trigger, triggerLayoutParams)
-        if (quickAttached) {
+        if (quickWindowAttached()) {
             val params = quick.root.layoutParams as WindowManager.LayoutParams
             params.x += triggerLayoutParams.x - oldX
             params.y += triggerLayoutParams.y - oldY
@@ -768,7 +797,7 @@ class OverlayWindow(
     }
 
     private fun constrainQuickPosition(updateEvenIfUnchanged: Boolean = false) {
-        if (!quickAttached) return
+        if (!quickWindowAttached()) return
         val params = quick.root.layoutParams as WindowManager.LayoutParams
         val oldX = params.x
         val oldY = params.y
@@ -793,7 +822,7 @@ class OverlayWindow(
     }
 
     private fun anchorQuickToTrigger() {
-        if (!quickAttached) return
+        if (!quickWindowAttached()) return
         val params = quick.root.layoutParams as WindowManager.LayoutParams
         val width = params.width.takeIf { it > 0 } ?: minOf(QUICK_WIDTH_DP.dp, (screenWidth - 24.dp).coerceAtLeast(1))
         val height = quick.root.height.takeIf { it > 0 } ?: QUICK_MIN_VISIBLE_HEIGHT_DP.dp
