@@ -37,6 +37,9 @@ class ForegroundEventPolicy {
         val supportedForeground = resolvedForeground in supportedPackages
         return activePackage != null &&
             activePackage in supportedPackages &&
+            // A different supported app is a real foreground switch, not an
+            // IME/layout transition. Let the caller update activePackage.
+            (eventPackage !in supportedPackages || eventPackage == activePackage) &&
             (inputMethodEvent || supportedForeground) &&
             (resolvedForeground == null || supportedForeground)
     }

@@ -174,4 +174,17 @@ class WechatBubbleParsingTest {
         assertEquals("测试聊天", captured.title)
         assertEquals("对方的新消息", captured.context.messages.single().text)
     }
+
+    @Test
+    fun `generic title fallback is not persisted as a contact key`() {
+        val captured = WechatOcrParser().parse(
+            blocks = listOf(line("对方的新消息", 180, 450, 520, 500)),
+            screenWidth = 1080,
+            screenHeight = 2400,
+            contentBottom = 2240,
+            bubbles = emptyList(),
+            fallbackTitle = "当前会话",
+        )!!
+        assertFalse(captured.persistable)
+    }
 }

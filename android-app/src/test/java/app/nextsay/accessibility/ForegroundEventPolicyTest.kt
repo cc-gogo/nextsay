@@ -231,4 +231,18 @@ class ForegroundEventPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun `does not treat a switch from WeChat to QQ as an IME transition`() {
+        assertFalse(
+            policy.shouldKeepActiveDuringTransientWindow(
+                eventPackage = "com.tencent.mobileqq",
+                resolvedForeground = "com.tencent.mobileqq",
+                activePackage = "com.tencent.mm",
+                ownPackage = "app.nextsay",
+                defaultImePackage = "com.baidu.input_mi",
+                supportedPackages = setOf("com.tencent.mm", "com.tencent.mobileqq"),
+            ),
+        )
+    }
 }

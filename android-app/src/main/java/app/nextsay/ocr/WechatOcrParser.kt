@@ -38,6 +38,7 @@ class WechatOcrParser {
         val titleBlock = (if (isQq) titleCandidates.minByOrNull { it.bounds.top }
             else titleCandidates.maxByOrNull { (it.bounds.right - it.bounds.left) * (it.bounds.bottom - it.bounds.top) })
         val title = titleBlock?.text ?: fallbackTitle?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val hasConfirmedTitle = titleBlock != null
 
         val messageBlocks = usable.asSequence()
             .filter { it !== titleBlock }
@@ -66,7 +67,9 @@ class WechatOcrParser {
                 draft = "",
                 confidence = messages.map { it.confidence }.average().toFloat(),
             ),
-            persistable = !GROUP_TITLE_PATTERN.matches(title),
+            // A generic fallback title is only for the current frame. Do not
+            // write it as a durable contact/history key.
+            persistable = hasConfirmedTitle && !GROUP_TITLE_PATTERN.matches(title),
         )
     }
 

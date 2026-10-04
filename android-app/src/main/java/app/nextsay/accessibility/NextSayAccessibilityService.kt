@@ -1160,7 +1160,8 @@ class NextSayAccessibilityService : AccessibilityService() {
                     // If the overlay covers the WeChat header, retain the
                     // last confirmed title so OCR can still return messages.
                     // A first capture without a title remains a hard failure.
-                    fallbackTitle = currentCapture?.title?.takeIf { currentCapture?.context?.sourcePackage == packageName },
+                    fallbackTitle = currentCapture?.title?.takeIf { currentCapture?.context?.sourcePackage == packageName }
+                        ?: "当前会话",
                 )
                 if (captured == null && exclusions.any { Rect.intersects(it,
                         Rect((bitmap.width * .30f).toInt(), (bitmap.height * .025f).toInt(),
