@@ -12,8 +12,8 @@ android {
         applicationId = "app.nextsay"
         minSdk = 30
         targetSdk = 35
-        versionCode = 41
-        versionName = "0.2.33"
+        versionCode = 43
+        versionName = "0.2.35"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

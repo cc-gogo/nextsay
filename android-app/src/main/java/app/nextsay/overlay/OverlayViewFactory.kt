@@ -560,7 +560,11 @@ class OverlayWindow(
     }
 
     private fun showQuickModel(model: QuickReplyModel) {
-        if (isEditing) return
+        Log.d("NextSayOverlay", "showQuickModel model=${model.javaClass.simpleName} editing=$isEditing quickAttached=$quickAttached rootAttached=${quick.root.isAttachedToWindow} parent=${quick.root.parent != null} visibility=${quick.root.visibility}")
+        if (isEditing) {
+            Log.d("NextSayOverlay", "showQuickModel skipped: editing")
+            return
+        }
         closePanel()
         quick.render(model)
         quick.root.visibility = if (hiddenForCapture) View.INVISIBLE else View.VISIBLE
@@ -573,6 +577,7 @@ class OverlayWindow(
             try {
                 windowManager.addView(quick.root, quickParams())
                 quickAttached = true
+                Log.d("NextSayOverlay", "quick window added rootAttached=${quick.root.isAttachedToWindow} parent=${quick.root.parent != null} visibility=${quick.root.visibility}")
             } catch (error: RuntimeException) {
                 Log.e("NextSayOverlay", "add quick window failed", error)
                 quickAttached = quick.root.isAttachedToWindow || quick.root.parent != null
@@ -582,6 +587,7 @@ class OverlayWindow(
         } else {
             quickAttached = true
             constrainQuickPosition()
+            Log.d("NextSayOverlay", "quick window reused rootAttached=${quick.root.isAttachedToWindow} parent=${quick.root.parent != null} visibility=${quick.root.visibility}")
         }
     }
 
@@ -680,6 +686,8 @@ class OverlayWindow(
     private fun closeQuick() {
         closeInstructionEditor()
         val attached = quick.root.isAttachedToWindow || quick.root.parent != null
+        val caller = Throwable().stackTrace.drop(1).take(4).joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+        Log.d("NextSayOverlay", "closeQuick attached=$attached quickAttached=$quickAttached visibility=${quick.root.visibility} caller=$caller")
         if (quickAttached || attached) {
             try {
                 // Immediate removal avoids a stale touchable window surviving
@@ -742,6 +750,7 @@ class OverlayWindow(
     }
 
     private fun handleTriggerTouch(event: MotionEvent): Boolean {
+        Log.d("NextSayOverlay", "trigger touch action=${MotionEvent.actionToString(event.actionMasked)} raw=${event.rawX},${event.rawY} visibility=${trigger.visibility} enabled=${trigger.isEnabled} attached=${trigger.isAttachedToWindow}")
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 draggedSinceDown = false
@@ -765,6 +774,7 @@ class OverlayWindow(
     }
 
     private fun handleGesture(action: GestureAction) {
+        Log.d("NextSayOverlay", "trigger gesture=${action.javaClass.simpleName} action=$action quickOpen=${quickWindowAttached()} panel=$panelAttached editor=$instructionEditorAttached menu=${menu != null}")
         when (action) {
             GestureAction.None -> Unit
             GestureAction.Click -> {

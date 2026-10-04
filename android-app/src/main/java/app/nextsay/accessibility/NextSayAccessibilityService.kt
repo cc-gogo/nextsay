@@ -208,7 +208,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                 }
                 val stillEnabled = withContext(Dispatchers.IO) { context.contactId?.let { contacts.get(it)?.entity?.autoEnabled } == true }
                 if (!stillEnabled || contacts.totalPaused || activePackage != context.sourcePackage ||
-                    currentContact?.entity?.id != context.contactId || resolveForegroundApplicationPackage() != context.sourcePackage ||
+                    currentContact?.entity?.id != context.contactId || !foregroundMatches(context.sourcePackage) ||
                     !isUnlockedInteractive() || (overlay.isEditing && !overlay.isQuickOpen) ||
                     requestTicket?.let { !automaticRounds.isCurrent(it) } != false || !frameConfirmed) {
                     // A paid response that cannot safely be displayed is not auto-retried.
@@ -305,7 +305,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                 }
             },
             isPackageActive = { packageName ->
-                activePackage == packageName && resolveForegroundApplicationPackage() == packageName
+                activePackage == packageName && foregroundMatches(packageName)
             },
             viewportRevision = { scrollRevisionTracker.revision },
             onStage = { stage ->
@@ -455,7 +455,8 @@ class NextSayAccessibilityService : AccessibilityService() {
             packageName == applicationContext.packageName -> observedForegroundPackage = null
             packageName == defaultImePackage || packageName == "com.android.systemui" ||
                 packageName?.endsWith(".systemui") == true -> Unit
-            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> observedForegroundPackage = null
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && activePackage !in SUPPORTED_PACKAGES ->
+                observedForegroundPackage = null
         }
         // A supported-app or IME event invalidates any stale delayed teardown,
         // even when the foreground policy ignores the event while a panel is open.
@@ -649,20 +650,25 @@ class NextSayAccessibilityService : AccessibilityService() {
     }
 
     private fun runQuickReply() {
+        Log.d("NextSayQuick", "runQuickReply enter quickOpen=${overlay.isQuickOpen} auto=${currentContact?.entity?.autoEnabled} quickJob=${quickRequestJob?.isActive} state=${controller.state.value.javaClass.simpleName} active=$activePackage resolved=${resolveForegroundApplicationPackage()}")
         if (overlay.isQuickOpen) {
+            Log.d("NextSayQuick", "runQuickReply branch=quick_open -> toggle/collapse")
             if (currentContact?.entity?.autoEnabled == true) overlay.suppressQuick()
             else { dismissQuickReply(); overlay.suppressQuick() }
             return
         }
         if (currentContact?.entity?.autoEnabled == true) {
+            Log.d("NextSayQuick", "runQuickReply branch=auto_show_cached")
             overlay.showCachedQuick()
             return
         }
         if (quickRequestJob?.isActive == true || controller.state.value is app.nextsay.overlay.OverlayState.Loading) {
+            Log.d("NextSayQuick", "runQuickReply branch=busy_cancel")
             dismissQuickReply()
             overlay.hideQuick()
             return
         }
+        Log.d("NextSayQuick", "runQuickReply branch=manual_request")
         requestQuickReply(overlay.quickInstructionText, collapseIfUnchanged = false)
     }
 
@@ -743,7 +749,7 @@ class NextSayAccessibilityService : AccessibilityService() {
             quickRequestJob?.isActive == true || imeGenerationJob?.isActive == true || advancedGenerationJob?.isActive == true ||
             automaticGenerationJob?.isActive == true || context.messages.lastOrNull()?.role !in
                 setOf(app.nextsay.context.MessageRole.OTHER, app.nextsay.context.MessageRole.ME) ||
-            activePackage != context.sourcePackage || resolveForegroundApplicationPackage() != context.sourcePackage ||
+            activePackage != context.sourcePackage || !foregroundMatches(context.sourcePackage) ||
             !isUnlockedInteractive()) {
             recordAutomaticState(if (overlay.isEditing && !overlay.isQuickOpen) "pending_editor" else "pending_busy")
             return
@@ -767,7 +773,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                 val freshContact = withContext(Dispatchers.IO) { contacts.get(contact.entity.id) }
                 if (freshContact?.entity?.autoEnabled != true || contacts.totalPaused ||
                     activePackage != pkg || detectorKey(context) != key || (overlay.isEditing && !overlay.isQuickOpen) ||
-                    resolveForegroundApplicationPackage() != pkg || !isUnlockedInteractive()) return@launch
+                    !foregroundMatches(pkg) || !isUnlockedInteractive()) return@launch
                 controller.showPreview(prepared)
                 controller.generate("", surface = DiagnosticSurface.OVERLAY)
                 // Success or API error is terminal; no automatic paid retry loop.
@@ -803,11 +809,11 @@ class NextSayAccessibilityService : AccessibilityService() {
         cancelAutoRefresh()
         cancelAutomaticGeneration()
         val capture = currentCapture
-        val pkg = activePackage
+        val pkg = activePackage ?: return
         if (capture == null) { showContactMenu(); return }
         scope.launch {
             val resolution = withContext(Dispatchers.IO) { contacts.menuResolution(capture) }
-            if (activePackage != pkg || currentCapture?.title != capture.title || resolveForegroundApplicationPackage() != pkg) return@launch
+            if (activePackage != pkg || currentCapture?.title != capture.title || !foregroundMatches(pkg)) return@launch
             if (resolution == null) {
                 currentContact = null
                 currentResolution = null
@@ -886,13 +892,23 @@ class NextSayAccessibilityService : AccessibilityService() {
     }
 
     private fun requestQuickReply(instruction: String, collapseIfUnchanged: Boolean) {
-        val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES } ?: return
-        if (resolveForegroundApplicationPackage() != packageName) return
+        val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES }
+        if (packageName == null) {
+            Log.w("NextSayQuick", "requestQuickReply return=no_active_supported_package active=$activePackage")
+            return
+        }
+        val resolved = resolveForegroundApplicationPackage()
+        if (!foregroundMatches(packageName)) {
+            Log.w("NextSayQuick", "requestQuickReply return=foreground_mismatch active=$packageName resolved=$resolved")
+            return
+        }
+        Log.d("NextSayQuick", "requestQuickReply start package=$packageName instructionLength=${instruction.length} collapse=$collapseIfUnchanged")
         generationSurface = GenerationSurface.QUICK
         cancelImeGeneration()
         cancelAdvancedGeneration()
         cancelAutomaticGeneration()
         missingConfiguration(DiagnosticSurface.OVERLAY)?.let { failure ->
+            Log.w("NextSayQuick", "requestQuickReply return=missing_configuration diagnostic=${failure.diagnosticId}")
             overlay.showQuickError(missingConfigurationMessage(), failure.diagnosticId)
             return
         }
@@ -901,7 +917,9 @@ class NextSayAccessibilityService : AccessibilityService() {
         overlay.showQuickReading()
         quickRequestJob = scope.launch {
             try {
+                Log.d("NextSayQuick", "quickReplyFlow.request begin package=$packageName")
                 quickReplyFlow.request(packageName, instruction, collapseIfUnchanged)
+                Log.d("NextSayQuick", "quickReplyFlow.request complete state=${controller.state.value.javaClass.simpleName}")
                 latestContextCache.fresh(packageName)?.let { context ->
                     incomingDetector.observe(detectorKey(context), context)
                     // Manual generation establishes the current visible frame as
@@ -910,6 +928,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                     if (!automaticRounds.hasPending) automaticRounds.clear()
                 }
             } finally {
+                Log.d("NextSayQuick", "quickReplyFlow.request finally epoch=$requestEpoch current=$busyEpoch")
                 if (requestEpoch == busyEpoch) {
                     overlay.setBusy(false)
                     if (latestContextCache.isDirty(packageName)) scheduleCurrentRefresh()
@@ -962,7 +981,7 @@ class NextSayAccessibilityService : AccessibilityService() {
 
     private suspend fun generateForIme(targetPackage: String): Result<List<ReplyCandidate>> {
         missingConfiguration(DiagnosticSurface.IME)?.let { return Result.failure(it) }
-        if (activePackage != targetPackage || resolveForegroundApplicationPackage() != targetPackage || !isUnlockedInteractive()) {
+        if (activePackage != targetPackage || !foregroundMatches(targetPackage) || !isUnlockedInteractive()) {
             return Result.failure(recordFailure(ProviderErrorCode.CAPTURE_FAILED, DiagnosticSurface.IME, includeCaptureDetails = false))
         }
         generationSurface = GenerationSurface.IME
@@ -985,7 +1004,7 @@ class NextSayAccessibilityService : AccessibilityService() {
                         surface = DiagnosticSurface.IME,
                     )
                     if (requestEpoch != busyEpoch || latestContextCache.isDirty(targetPackage) ||
-                        resolveForegroundApplicationPackage() != targetPackage || !isUnlockedInteractive()) {
+                        !foregroundMatches(targetPackage) || !isUnlockedInteractive()) {
                         Result.failure(recordFailure(ProviderErrorCode.CAPTURE_FAILED, DiagnosticSurface.IME, includeCaptureDetails = false))
                     } else response
                 }
@@ -1415,6 +1434,16 @@ class NextSayAccessibilityService : AccessibilityService() {
         // are still read in the capture path when the user requests context.
         return observedForegroundPackage
     }
+
+    /**
+     * MIUI briefly clears the event-derived foreground hint while it attaches
+     * the IME or a system window. The active supported package remains the
+     * last reliable foreground signal during that gap. A concrete different
+     * package still fails the check.
+     */
+    private fun foregroundMatches(expected: String): Boolean =
+        resolveForegroundApplicationPackage()?.let { it == expected }
+            ?: (activePackage == expected)
 
     private fun defaultInputMethodPackage(): String? {
         val flattened = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
