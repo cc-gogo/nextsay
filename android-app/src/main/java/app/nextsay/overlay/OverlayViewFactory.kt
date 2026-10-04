@@ -501,7 +501,14 @@ class OverlayWindow(
             notice = listOfNotNull(state.context.replyRound?.title?.let { "$it · 当前候选${if (state.context.contactId == null) "（仅当前画面，未关联记忆）" else ""}" }, rendered.notice).joinToString("\n").ifBlank { null },
         ) else rendered
         if (model == QuickReplyModel.Hidden) {
-            closeQuick()
+            // Idle/Preview are controller state transitions, not user
+            // requests to hide the quick window. Background refreshes and a
+            // cancelled generation briefly pass through these states; closing
+            // here made the window flash and made the next tap feel delayed.
+            // Explicit hide/suppress calls still remove it.
+            if (quickWindowAttached() && cachedQuick != QuickReplyModel.Hidden) {
+                quick.render(cachedQuick)
+            }
             return
         }
         cachedQuick = model

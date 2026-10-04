@@ -93,6 +93,13 @@ class OverlayDragUiTest {
         assertTrue("A stale quick attachment flag must not block reopening", overlay.isQuickOpen)
         assertTrue(registered(overlay, quick.root))
     }
+
+    @Test fun controllerIdleDoesNotFlashCloseAnAlreadyVisibleQuickWindow() = fixture { overlay, _, quick, _ ->
+        overlay.renderQuick(OverlayState.Idle)
+
+        assertTrue("Controller state transitions must not hide the quick window", overlay.isQuickOpen)
+        assertTrue(registered(overlay, quick.root))
+    }
     @Test fun draggingToTopKeepsCandidateWindowBelowChatHeader() = fixture { overlay, trigger, quick, _ ->
         drag(trigger, 0f, -800f)
         assertTrue(overlay.isQuickOpen)

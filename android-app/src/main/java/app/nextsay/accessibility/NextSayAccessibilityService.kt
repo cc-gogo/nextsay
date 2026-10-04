@@ -505,6 +505,10 @@ class NextSayAccessibilityService : AccessibilityService() {
                 cancelImeGeneration()
                 cancelAdvancedGeneration()
                 cancelAutomaticGeneration()
+                // The quick window is presentation state. Close it explicitly
+                // on a real app switch now that controller Idle no longer
+                // tears down a visible window during ordinary refreshes.
+                overlay.hideQuick()
                 incomingDetector.reset()
                 automaticRounds.clear()
                 currentContact = null
