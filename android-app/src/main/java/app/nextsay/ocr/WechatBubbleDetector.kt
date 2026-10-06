@@ -3,7 +3,10 @@ package app.nextsay.ocr
 import app.nextsay.context.MessageRole
 import app.nextsay.context.ScreenRect
 
-data class OcrBubble(val bounds: ScreenRect, val role: MessageRole, val isMedia: Boolean = false)
+/** [color] is the detector material: 1 green (own), 2 white, 3 dark mode; 0 for non-pixel sources. */
+/** [transcript] marks a voice-to-text box whose side was taken from the voice bubble above it. */
+data class OcrBubble(val bounds: ScreenRect, val role: MessageRole, val isMedia: Boolean = false, val color: Int = 0,
+    val transcript: Boolean = false)
 
 class WechatBubbleDetector {
     /** Local geometry only. No avatar identity recognition and no screenshot upload. */
@@ -87,9 +90,33 @@ class WechatBubbleDetector {
                 color.toInt() == 1 && compact && rightPlacement -> MessageRole.ME
                 else -> MessageRole.UNKNOWN
             }
-            bubbles += OcrBubble(bounds, role)
+            bubbles += OcrBubble(bounds, role, color = color.toInt())
         }
-        return bubbles.sortedBy { it.bounds.top }
+        return inheritTranscriptRoles(bubbles.sortedBy { it.bounds.top }, width, height)
+    }
+
+    /**
+     * A voice-to-text transcript is a tail-less white box drawn directly below
+     * its voice bubble, aligned to the same side. It is often wide enough to
+     * cross the screen center, so its own geometry cannot tell the sender.
+     */
+    private fun inheritTranscriptRoles(bubbles: List<OcrBubble>, width: Int, height: Int): List<OcrBubble> {
+        val maxGap = (height * 0.012f).toInt()
+        val edgeTolerance = (width * 0.03f).toInt()
+        val result = bubbles.toMutableList()
+        for (index in 1 until result.size) {
+            val transcript = result[index]
+            if (transcript.role != MessageRole.UNKNOWN || (transcript.color != 2 && transcript.color != 3)) continue
+            val voice = result.subList(0, index).lastOrNull { it.bounds.bottom <= transcript.bounds.top + edgeTolerance } ?: continue
+            if (transcript.bounds.top - voice.bounds.bottom !in -edgeTolerance..maxGap) continue
+            val aligned = when (voice.role) {
+                MessageRole.ME -> transcript.bounds.right in voice.bounds.right - edgeTolerance..voice.bounds.right + edgeTolerance
+                MessageRole.OTHER -> transcript.bounds.left in voice.bounds.left - edgeTolerance..voice.bounds.left + edgeTolerance
+                else -> false
+            }
+            if (aligned) result[index] = transcript.copy(role = voice.role, transcript = true)
+        }
+        return result
     }
 
     private fun material(pixel: Int): Byte {

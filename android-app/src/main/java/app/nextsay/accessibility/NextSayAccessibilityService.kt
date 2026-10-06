@@ -69,6 +69,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -96,6 +97,8 @@ class NextSayAccessibilityService : AccessibilityService() {
     // Accessibility events already carry the package that changed, so keep a
     // lightweight event-driven foreground hint for overlay decisions.
     private var observedForegroundPackage: String? = null
+    private var supportedForegroundConfirmedAt = 0L
+    private var windowQuery: kotlinx.coroutines.Deferred<List<WindowPackageSnapshot>?>? = null
     // Window bounds are refreshed off the accessibility/main thread. Reading
     // `windows` synchronously on MIUI has previously blocked for minutes.
     private var cachedKeyboardTop: Int? = null
@@ -138,6 +141,9 @@ class NextSayAccessibilityService : AccessibilityService() {
     // This token makes an old unsupported-app teardown harmless after a chat
     // window becomes foreground again.
     private var unsupportedTeardownToken = 0L
+    // Incremented whenever a new capture is scheduled. Background OCR/history
+    // work must match this token before it may mutate the active conversation.
+    private var conversationCaptureEpoch = 0L
     private fun cancelUnsupportedTeardown() {
         unsupportedPackageJob?.cancel()
         unsupportedPackageJob = null
@@ -281,6 +287,13 @@ class NextSayAccessibilityService : AccessibilityService() {
                 withContext(Dispatchers.IO) {
                     val historyEpoch = contacts.historyEpoch
                     val resolution = contacts.resolve(capture)
+                    // Only an app switch makes this frame stale. Ordinary WeChat
+                    // content-change events arrive continuously and must not
+                    // discard a capture the user explicitly requested.
+                    if (latestContextCache.currentEpoch(capture.context.sourcePackage) == null ||
+                        !foregroundMatches(capture.context.sourcePackage)) {
+                        return@withContext app.nextsay.history.HistoryLoadResult(emptyList(), false)
+                    }
                     val oldKey = currentCapture?.let { it.context.sourcePackage to it.title }
                     val chosenId = contacts.consumeSelection(capture.context.sourcePackage, capture.title)
                         ?: currentContact?.entity?.id?.takeIf { oldKey == (capture.context.sourcePackage to capture.title) }
@@ -289,6 +302,9 @@ class NextSayAccessibilityService : AccessibilityService() {
                     val sameConfirmedPerson = contact != null && currentContact?.entity?.id == contact.entity.id && oldKey?.first == capture.context.sourcePackage
                     if ((!sameConfirmedPerson && oldKey != (capture.context.sourcePackage to capture.title)) || currentContact?.entity?.id != contact?.entity?.id) {
                         withContext(Dispatchers.Main) {
+                            // This merge runs inside the quick/IME request that
+                            // captured the frame. Cancelling that request here
+                            // would abort every first generation in a new chat.
                             cancelAutomaticGeneration()
                             incomingDetector.reset()
                             automaticRounds.clear()
@@ -355,21 +371,46 @@ class NextSayAccessibilityService : AccessibilityService() {
         // Low-frequency local safety net for missing/coalesced accessibility events.
         // Never captures other apps, a locked screen, disabled profiles or editor contents.
         automaticWatchJob = scope.launch {
+            var unsupportedSamples = 0
             while (true) {
-                delay(4_000L)
-                if (!isUnlockedInteractive()) continue
-                val resolved = resolveForegroundApplicationPackage()
-                val pkg = (activePackage ?: resolved)?.takeIf { it in SUPPORTED_PACKAGES }
-                    ?: continue
-                // A null event-driven hint is common while MIUI swaps the IME.
-                // Keep the last supported package during that short gap; the
-                // teardown path below still removes the overlay when a real
-                // non-supported foreground event settles.
-                if (resolved != null && resolved != pkg) continue
-                if (activePackage == null) activePackage = pkg
-                // Also repairs a window removed by a ROM without a matching
-                // accessibility event, including the IME transition case.
-                overlay.setSupportedAppActive(true)
+                delay(1_000L)
+                if (!isUnlockedInteractive()) {
+                    if (activePackage != null) deactivateSupportedApp()
+                    else overlay.setSupportedAppActive(false)
+                    continue
+                }
+                val snapshots = queryWindowSnapshots(350L)
+                // A slow/failed window query (common on MIUI) says nothing about
+                // the foreground app. Deactivating on it cleared the active chat
+                // while the user was still in WeChat.
+                if (snapshots == null) continue
+                val pkg = foregroundWindowResolver.resolveCurrentUserPackage(snapshots, SUPPORTED_PACKAGES)
+                if (pkg == null && overlay.isInstructionEditorOpen) {
+                    // The modal input window takes focus and the chat window briefly
+                    // exposes no root. That is not leaving the app; closing here
+                    // killed the editor as soon as the user started typing.
+                    continue
+                }
+                if (pkg == null) {
+                    // The trigger is shown only while WeChat/QQ is foreground.
+                    // MIUI can briefly return a chat window without its root
+                    // during IME transitions, so require two misses in a row.
+                    val recentlyConfirmed = SystemClock.elapsedRealtime() - supportedForegroundConfirmedAt < 2_000L
+                    if (recentlyConfirmed || ++unsupportedSamples < 2) continue
+                    if (activePackage != null || observedForegroundPackage in SUPPORTED_PACKAGES) deactivateSupportedApp()
+                    else overlay.setSupportedAppActive(false)
+                    continue
+                }
+                unsupportedSamples = 0
+                supportedForegroundConfirmedAt = SystemClock.elapsedRealtime()
+                observedForegroundPackage = pkg
+                if (activePackage != pkg) {
+                    val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+                    event.packageName = pkg
+                    try { onAccessibilityEvent(event) } finally { event.recycle() }
+                } else {
+                    overlay.setSupportedAppActive(true)
+                }
                 if (contacts.totalPaused || (overlay.isEditing && !overlay.isQuickOpen) || quickRequestJob?.isActive == true ||
                     imeGenerationJob?.isActive == true || advancedGenerationJob?.isActive == true || autoCaptureRunning) continue
                 val enabled = try { withContext(Dispatchers.IO) { currentContact?.entity?.id?.let { contacts.get(it)?.entity?.autoEnabled } == true } }
@@ -423,6 +464,85 @@ class NextSayAccessibilityService : AccessibilityService() {
         } finally {
             event.recycle()
         }
+    }
+
+    private fun deactivateSupportedApp() {
+        cancelUnsupportedTeardown()
+        cancelQuickRequest()
+        cancelImeGeneration()
+        cancelAdvancedGeneration()
+        cancelAutoRefresh()
+        cancelAutomaticGeneration()
+        incomingDetector.reset()
+        automaticRounds.clear()
+        currentContact = null
+        currentCapture = null
+        latestContextCache.clear()
+        activePackage = null
+        observedForegroundPackage = null
+        controller.dismiss()
+        // Leaving the chat app removes the trigger and any expanded content.
+        overlay.setSupportedAppActive(false)
+    }
+
+    /**
+     * The `windows` binder call is blocking and ignores coroutine cancellation,
+     * so a timeout around it never fires while MIUI stalls it. Run it in its
+     * own job and only wait on that job; reuse a still-running query.
+     */
+    private suspend fun queryWindowSnapshots(timeoutMillis: Long): List<WindowPackageSnapshot>? {
+        val query = windowQuery?.takeIf { it.isActive }
+            ?: scope.async(Dispatchers.IO) { windowPackageSnapshots() }.also { windowQuery = it }
+        return withTimeoutOrNull(timeoutMillis) { query.await() }
+    }
+
+    /** Null means the window list could not be read, not "no supported app". */
+    private fun windowPackageSnapshots(): List<WindowPackageSnapshot>? =
+        runCatching {
+            windows.map { window ->
+                val root = runCatching { window.root }.getOrNull()
+                try {
+                    WindowPackageSnapshot(
+                        isApplication = window.type == AccessibilityWindowInfo.TYPE_APPLICATION,
+                        layer = window.layer,
+                        packageName = root?.packageName?.toString(),
+                    )
+                } finally {
+                    root?.let(::recycleNode)
+                }
+            }
+        }.getOrNull()
+
+    /**
+     * The event-driven hint can lag behind the real foreground (for example
+     * right after returning to WeChat). Verify with the window list before
+     * refusing a user tap, and activate the chat app if it is really there.
+     */
+    private fun withSupportedForeground(action: (String) -> Unit) {
+        val current = activePackage
+        if (current in SUPPORTED_PACKAGES && foregroundMatches(current!!)) {
+            action(current)
+            return
+        }
+        scope.launch {
+            val pkg = queryWindowSnapshots(500L)?.let { foregroundWindowResolver.resolveCurrentUserPackage(it, SUPPORTED_PACKAGES) }
+            if (pkg == null) {
+                showNotInChatApp()
+                return@launch
+            }
+            observedForegroundPackage = pkg
+            if (activePackage != pkg) {
+                val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+                event.packageName = pkg
+                try { onAccessibilityEvent(event) } finally { event.recycle() }
+            }
+            if (activePackage == pkg) action(pkg) else showNotInChatApp()
+        }
+    }
+
+    private fun showNotInChatApp() {
+        overlay.hideAllContent()
+        Toast.makeText(this, "当前不在微信或 QQ 聊天界面", Toast.LENGTH_SHORT).show()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -519,7 +639,15 @@ class NextSayAccessibilityService : AccessibilityService() {
                 latestContextCache.clear()
             }
             activePackage = supportedPackage
+            supportedForegroundConfirmedAt = SystemClock.elapsedRealtime()
             overlay.setSupportedAppActive(true)
+            // Attach the trigger before any OCR/capture work. The trigger is
+            // independent of conversation recognition and should appear as
+            // soon as the supported app is foreground.
+            if (supportedPackageChanged) {
+                conversationCaptureEpoch++
+                latestContextCache.markPageChanged(supportedPackage)
+            }
             val isForegroundEvent = packageName == supportedPackage
             if (isForegroundEvent && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && !supportedPackageChanged) {
                 // A keyboard/layout window event is not proof of changing person.
@@ -536,6 +664,7 @@ class NextSayAccessibilityService : AccessibilityService() {
             }
             if (isForegroundEvent && foregroundEventPolicy.shouldInvalidateContext(event.eventType, supportedPackageChanged)) {
                 latestContextCache.markPageChanged(supportedPackage)
+                conversationCaptureEpoch++
                 if (overlay.isEditing) editorChanged = true
             }
             // The quick candidate window is presentation only. It must not stop
@@ -651,12 +780,17 @@ class NextSayAccessibilityService : AccessibilityService() {
 
     private fun runQuickReply() {
         Log.d("NextSayQuick", "runQuickReply enter quickOpen=${overlay.isQuickOpen} auto=${currentContact?.entity?.autoEnabled} quickJob=${quickRequestJob?.isActive} state=${controller.state.value.javaClass.simpleName} active=$activePackage resolved=${resolveForegroundApplicationPackage()}")
+        // Collapsing the expanded window must work even after leaving the chat app.
         if (overlay.isQuickOpen) {
             Log.d("NextSayQuick", "runQuickReply branch=quick_open -> toggle/collapse")
             if (currentContact?.entity?.autoEnabled == true) overlay.suppressQuick()
             else { dismissQuickReply(); overlay.suppressQuick() }
             return
         }
+        withSupportedForeground { openQuickReply() }
+    }
+
+    private fun openQuickReply() {
         if (currentContact?.entity?.autoEnabled == true) {
             Log.d("NextSayQuick", "runQuickReply branch=auto_show_cached")
             overlay.showCachedQuick()
@@ -695,14 +829,16 @@ class NextSayAccessibilityService : AccessibilityService() {
     private fun scheduleCurrentRefresh() {
         val pkg = activePackage ?: return
         if (overlay.isEditing && !overlay.isQuickOpen) return
+        if (quickRequestJob?.isActive == true) return
         latestContextCache.markPageChanged(pkg)
+        conversationCaptureEpoch++
         scheduleAutoRefresh(autoRefreshScheduler.onPageChanged(pkg, SystemClock.elapsedRealtime()))
     }
 
     private fun cancelAutomaticGeneration() {
         if (automaticGenerationJob?.isActive == true) {
             automaticGenerationJob?.cancel()
-            controller.stopPendingGeneration()
+            controller.cancelPendingGeneration()
             ++busyEpoch
             overlay.setBusy(false)
             overlay.showGenerationCancelled()
@@ -885,7 +1021,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         quickRequestJob?.cancel()
         quickRequestJob = null
         if (running) {
-            controller.stopPendingGeneration()
+            controller.cancelPendingGeneration()
             overlay.showGenerationCancelled()
         }
         overlay.setBusy(false)
@@ -895,11 +1031,13 @@ class NextSayAccessibilityService : AccessibilityService() {
         val packageName = activePackage?.takeIf { it in SUPPORTED_PACKAGES }
         if (packageName == null) {
             Log.w("NextSayQuick", "requestQuickReply return=no_active_supported_package active=$activePackage")
+            showNotInChatApp()
             return
         }
         val resolved = resolveForegroundApplicationPackage()
         if (!foregroundMatches(packageName)) {
             Log.w("NextSayQuick", "requestQuickReply return=foreground_mismatch active=$packageName resolved=$resolved")
+            showNotInChatApp()
             return
         }
         Log.d("NextSayQuick", "requestQuickReply start package=$packageName instructionLength=${instruction.length} collapse=$collapseIfUnchanged")
@@ -927,6 +1065,10 @@ class NextSayAccessibilityService : AccessibilityService() {
                     // already queued while the request was running.
                     if (!automaticRounds.hasPending) automaticRounds.clear()
                 }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                // User/app switch cancellation is expected, but never leave a
+                // stale manual "waiting" presentation behind.
+                if (requestEpoch == busyEpoch) overlay.showQuickError("读取当前对话已取消，请重试")
             } finally {
                 Log.d("NextSayQuick", "quickReplyFlow.request finally epoch=$requestEpoch current=$busyEpoch")
                 if (requestEpoch == busyEpoch) {
@@ -938,8 +1080,9 @@ class NextSayAccessibilityService : AccessibilityService() {
     }
 
     private fun regenerateQuickReply(instruction: String) {
+        Log.d("NextSayQuick", "regenerateQuickReply clicked instructionLength=${instruction.length} quickOpen=${overlay.isQuickOpen}")
         if (quickRequestJob?.isActive == true) return
-        requestQuickReply(instruction, collapseIfUnchanged = false)
+        withSupportedForeground { requestQuickReply(instruction, collapseIfUnchanged = false) }
     }
 
     private fun openAdvancedPanel(refresh: Boolean = false) {
@@ -1026,13 +1169,17 @@ class NextSayAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun obtainFreshContext(packageName: String, forceRefresh: Boolean = false): ContextCaptureResult {
-        if (forceRefresh) latestContextCache.markPageChanged(packageName)
+        if (forceRefresh) {
+            latestContextCache.markPageChanged(packageName)
+            conversationCaptureEpoch++
+        }
         latestContextCache.fresh(packageName)?.let { return ContextCaptureResult.Success(it) }
         if (!latestContextCache.isDirty(packageName)) latestContextCache.markPageChanged(packageName)
         autoRefreshJob?.cancelAndJoin()
         autoRefreshJob = null
         autoRefreshScheduler.cancel()
         val ticket = latestContextCache.beginCapture(packageName) ?: return ContextCaptureResult.Busy
+        val captureEpoch = conversationCaptureEpoch
         autoRefreshScheduler.onCaptureStarted()
         if (packageName == WECHAT_PACKAGE) {
             autoRefreshScheduler.recordWechatOcrStarted(SystemClock.elapsedRealtime())
@@ -1040,8 +1187,10 @@ class NextSayAccessibilityService : AccessibilityService() {
         return try {
             when (val result = contextCoordinator.capture(packageName)) {
                 is ContextCaptureResult.Success -> {
-                    if (latestContextCache.complete(ticket, result.context)) result
-                    else ContextCaptureResult.Cancelled
+                    // Cache only an unchanged page, but a user-requested frame
+                    // stays valid while the same chat app is foreground.
+                    if (captureEpoch == conversationCaptureEpoch) latestContextCache.complete(ticket, result.context)
+                    if (activePackage == packageName) result else ContextCaptureResult.Cancelled
                 }
                 else -> {
                     latestContextCache.fail(ticket)
@@ -1083,6 +1232,7 @@ class NextSayAccessibilityService : AccessibilityService() {
             return
         }
         val ticket = latestContextCache.beginCapture(packageName) ?: return
+        val captureEpoch = ++conversationCaptureEpoch
         autoRefreshScheduler.onCaptureStarted()
         autoCaptureRunning = true
         if (packageName == WECHAT_PACKAGE) {
@@ -1091,7 +1241,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         try {
             when (val result = contextCoordinator.capture(packageName)) {
                 is ContextCaptureResult.Success -> {
-                    if (latestContextCache.complete(ticket, result.context)) processAutomaticContext(result.context)
+                    if (captureEpoch == conversationCaptureEpoch && latestContextCache.complete(ticket, result.context) && activePackage == packageName) processAutomaticContext(result.context)
                 }
                 else -> latestContextCache.fail(ticket)
             }
@@ -1134,14 +1284,43 @@ class NextSayAccessibilityService : AccessibilityService() {
             } else emptyList()
             if (mediaNodes.any { it.password }) { captureStage = "password_blocked"; return null }
             captureStage = "screenshot"
-            val screenshot = screenshotSource.capture() ?: run { captureStage = "screenshot_busy"; return null }
-            val bitmap = screenshot.getOrThrow()
+            val targetWindow = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(500L) { findSupportedWindow(packageName) }
+                }
+            } else null
+            val windowShot = targetWindow?.let { windowId ->
+                // Window capture is an optimization, never a hard dependency.
+                // Xiaomi/MIUI may expose a stale or secondary-user window id;
+                // immediately fall back to the proven display capture.
+                screenshotSource.captureWindow(windowId)?.getOrNull()
+            }
+            val screenshot = windowShot ?: screenshotSource.capture()?.getOrNull()
+            val recoveredScreenshot = screenshot ?: run {
+                delay(80L)
+                screenshotSource.capture()?.getOrNull()
+            }
+            val screenshotBitmap = recoveredScreenshot ?: run {
+                captureStage = "screenshot_busy"
+                return null
+            }
+            val bitmap = screenshotBitmap
             try {
-                val after = overlay.captureExclusions()
-                // Geometry belongs to the frame; reject if the user moved/closed a view.
-                if (before != after) { captureStage = "overlay_moved"; return null }
-                val exclusions = before
-                val contentBottom = resolveChatContentBottom(bitmap.height, mediaNodes)
+                // The overlay may re-layout while the screenshot is being
+                // recognized (especially when the IME opens). Keep the
+                // exclusions from the captured frame instead of discarding an
+                // otherwise valid chat. A later frame will use its own bounds.
+                // A window-only capture never contains our overlay, so the
+                // chat text underneath it is real and must not be masked.
+                val exclusions = if (screenshot === windowShot) emptyList() else before
+                val viewportBottom = resolveChatContentBottom(bitmap.height, mediaNodes)
+                // With the IME open and no exposed input node, the viewport
+                // reaches the keyboard and still contains the input bar.
+                val marginX = (bitmap.width * .01f).toInt()
+                val contentBottom = if (packageName == WECHAT_PACKAGE) {
+                    ChatViewportBounds.inputBarTop(bitmap.height, viewportBottom) { y -> bitmap.getPixel(marginX, y) }
+                        ?.takeIf { it < viewportBottom && it > bitmap.height / 4 } ?: viewportBottom
+                } else viewportBottom
                 captureBottom = contentBottom
                 val bubbles = if (packageName == WECHAT_PACKAGE) {
                     withContext(Dispatchers.Default) {
@@ -1159,7 +1338,14 @@ class NextSayAccessibilityService : AccessibilityService() {
                             .filter { geometry -> labelledMedia.none { labelled -> Rect.intersects(
                                 Rect(geometry.bounds.left, geometry.bounds.top, geometry.bounds.right, geometry.bounds.bottom),
                                 Rect(labelled.bounds.left, labelled.bounds.top, labelled.bounds.right, labelled.bounds.bottom)) } }
-                        WechatBubbleDetector().detect(pixels, bitmap.width, bitmap.height, contentTop, contentBottom) + labelledMedia + geometryMedia
+                        val textBubbles = WechatBubbleDetector().detect(pixels, bitmap.width, bitmap.height, contentTop, contentBottom)
+                        // A plain white transcript box also looks like an unlabelled
+                        // photo to the geometry fallback. The transcript wins: treating
+                        // it as media would drop its text and lose the sender.
+                        val transcripts = textBubbles.filter { it.transcript }
+                        textBubbles + labelledMedia + geometryMedia.filter { geometry -> transcripts.none { transcript -> Rect.intersects(
+                            Rect(geometry.bounds.left, geometry.bounds.top, geometry.bounds.right, geometry.bounds.bottom),
+                            Rect(transcript.bounds.left, transcript.bounds.top, transcript.bounds.right, transcript.bounds.bottom)) } }
                     }
                 } else null
                 captureStage = "ocr_recognize"
@@ -1172,6 +1358,9 @@ class NextSayAccessibilityService : AccessibilityService() {
                 val sourceApp = if (packageName == "com.tencent.mm") "wechat" else "qq"
                 captureTextCount = blocks.size
                 captureStage = "ocr_parse"
+                val headerRect = Rect((bitmap.width * .30f).toInt(), (bitmap.height * .025f).toInt(),
+                    (bitmap.width * .70f).toInt(), (bitmap.height * .09f).toInt())
+                val headerObscured = exclusions.any { Rect.intersects(it, headerRect) }
                 val captured = ocrParser.parse(
                     blocks = blocks,
                     screenWidth = bitmap.width,
@@ -1182,13 +1371,12 @@ class NextSayAccessibilityService : AccessibilityService() {
                     bubbles = bubbles,
                     // If the overlay covers the WeChat header, retain the
                     // last confirmed title so OCR can still return messages.
-                    // A first capture without a title remains a hard failure.
-                    fallbackTitle = currentCapture?.title?.takeIf { currentCapture?.context?.sourcePackage == packageName }
+                    // With a visible header an unread title may belong to a
+                    // different chat, so never inherit the previous contact.
+                    fallbackTitle = currentCapture?.title?.takeIf { headerObscured && currentCapture?.context?.sourcePackage == packageName }
                         ?: "当前会话",
                 )
-                if (captured == null && exclusions.any { Rect.intersects(it,
-                        Rect((bitmap.width * .30f).toInt(), (bitmap.height * .025f).toInt(),
-                            (bitmap.width * .70f).toInt(), (bitmap.height * .09f).toInt())) }) {
+                if (captured == null && headerObscured) {
                     captureStage = "header_obscured"
                 }
                 val latestAvatar = mediaNodes.filter { node ->
@@ -1398,6 +1586,21 @@ class NextSayAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private fun findSupportedWindow(expectedPackage: String): Int? =
+        windows.asSequence()
+            .filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+            .mapNotNull { window ->
+                val root = runCatching { window.root }.getOrNull() ?: return@mapNotNull null
+                try {
+                    root.packageName?.toString()
+                        ?.takeIf { it == expectedPackage }
+                        ?.let { window.id }
+                } finally {
+                    recycleNode(root)
+                }
+            }
+            .firstOrNull()
+
     private fun resolveChatContentBottom(screenHeight: Int, nodes: List<app.nextsay.context.NodeSnapshot> = emptyList()): Int {
         val keyboardTop = visibleKeyboardTop()
         val inputNodes = nodes.filter { it.editable && !it.password }
@@ -1432,7 +1635,7 @@ class NextSayAccessibilityService : AccessibilityService() {
         // block the accessibility main thread for more than two minutes. The
         // event-driven value is sufficient for overlay eligibility; chat roots
         // are still read in the capture path when the user requests context.
-        return observedForegroundPackage
+        return observedForegroundPackage?.takeIf { it in SUPPORTED_PACKAGES }
     }
 
     /**

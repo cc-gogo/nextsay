@@ -74,4 +74,30 @@ class WechatBubbleDetectorTest {
         fill(ScreenRect(156, 468, 170, 480), 0xff2c2c2c.toInt())
         assertEquals(MessageRole.OTHER, detect().single().role)
     }
+
+    @Test
+    fun `voice transcript below own voice bubble is self`() {
+        fill(ScreenRect(488, 1580, 910, 1670), 0xff95ec69.toInt())
+        fill(ScreenRect(909, 1608, 924, 1620), 0xff95ec69.toInt())
+        fill(ScreenRect(168, 1680, 910, 1880), 0xffffffff.toInt())
+        val bubbles = detect()
+        assertEquals(listOf(MessageRole.ME, MessageRole.ME), bubbles.map { it.role })
+        assertEquals(listOf(false, true), bubbles.map { it.transcript })
+    }
+
+    @Test
+    fun `voice transcript below incoming voice bubble is other`() {
+        fill(ScreenRect(168, 1580, 520, 1670), 0xffffffff.toInt())
+        fill(ScreenRect(156, 1608, 170, 1620), 0xffffffff.toInt())
+        fill(ScreenRect(168, 1682, 912, 1880), 0xffffffff.toInt())
+        assertEquals(listOf(MessageRole.OTHER, MessageRole.OTHER), detect().map { it.role })
+    }
+
+    @Test
+    fun `wide white box far below a voice bubble keeps unknown`() {
+        fill(ScreenRect(488, 1000, 910, 1090), 0xff95ec69.toInt())
+        fill(ScreenRect(909, 1028, 924, 1040), 0xff95ec69.toInt())
+        fill(ScreenRect(168, 1500, 912, 1700), 0xffffffff.toInt())
+        assertEquals(MessageRole.UNKNOWN, detect().last().role)
+    }
 }

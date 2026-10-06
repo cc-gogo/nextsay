@@ -212,6 +212,7 @@ class QuickReplyFlowTest {
         assertEquals("不可丢失", fixture.requests.last().second)
     }
 
+
     @Test
     fun `dismissed capture cannot clear instructions or reopen candidates`() = runTest {
         val fixture = Fixture()

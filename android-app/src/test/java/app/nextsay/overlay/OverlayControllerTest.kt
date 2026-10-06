@@ -148,6 +148,40 @@ class OverlayControllerTest {
     }
 
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `stopping pending generation clears loading state immediately`() = runTest {
+        val controller = OverlayController { _, _, _, _ ->
+            delay(100)
+            Result.success(replies())
+        }
+        controller.showPreview(context)
+        launch { controller.generate() }
+        runCurrent()
+        assertTrue(controller.state.value is OverlayState.Loading)
+
+        controller.stopPendingGeneration()
+
+        assertTrue(controller.state.value is OverlayState.Preview)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `cancelled pending generation cannot publish late results`() = runTest {
+        val controller = OverlayController { _, _, _, _ ->
+            delay(100)
+            Result.success(replies())
+        }
+        controller.showPreview(context)
+        launch { controller.generate() }
+        runCurrent()
+        controller.cancelPendingGeneration()
+
+        advanceUntilIdle()
+
+        assertTrue(controller.state.value is OverlayState.Preview)
+    }
+
+    @Test
     fun `refresh replaces results with a new context preview`() = runTest {
         val controller = OverlayController { _, _, _, _ -> Result.success(replies()) }
         controller.showPreview(context)

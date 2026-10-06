@@ -52,4 +52,19 @@ class ForegroundWindowResolverTest {
 
         assertEquals("com.tencent.mobileqq", foreground)
     }
+
+    @Test
+    fun `selects only the highest supported application window`() {
+        val foreground = resolver.resolveCurrentUserPackage(
+            listOf(
+                WindowPackageSnapshot(true, 2, "com.tencent.mm"),
+                WindowPackageSnapshot(true, 8, "com.android.settings"),
+                WindowPackageSnapshot(true, 4, "com.tencent.mobileqq"),
+                WindowPackageSnapshot(false, 20, "com.tencent.mm"),
+            ),
+            setOf("com.tencent.mm", "com.tencent.mobileqq"),
+        )
+
+        assertEquals("com.tencent.mobileqq", foreground)
+    }
 }

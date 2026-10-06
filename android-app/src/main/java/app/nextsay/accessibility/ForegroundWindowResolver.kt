@@ -18,4 +18,12 @@ class ForegroundWindowResolver {
         eventPackage: String?,
         supportedPackages: Set<String>,
     ): String? = resolvedPackage ?: eventPackage?.takeIf { it in supportedPackages }
+
+    fun resolveCurrentUserPackage(
+        windows: List<WindowPackageSnapshot>,
+        supportedPackages: Set<String>,
+    ): String? = windows.asSequence()
+        .filter { it.isApplication && it.packageName in supportedPackages }
+        .maxByOrNull { it.layer }
+        ?.packageName
 }

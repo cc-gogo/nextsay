@@ -163,6 +163,10 @@ class QuickReplyViews(
     }
     fun render(model: QuickReplyModel) {
         currentModel = model
+        generate.contentDescription = when (model) {
+            is QuickReplyModel.Loading -> "正在读取对话"
+            else -> "生成新回复"
+        }
         if (model is QuickReplyModel.Loading && content.childCount > 0) {
             loading = true
             updateEntryControls()

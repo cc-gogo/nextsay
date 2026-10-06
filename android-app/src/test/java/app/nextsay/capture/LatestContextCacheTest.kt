@@ -4,6 +4,7 @@ import app.nextsay.context.ChatContext
 import app.nextsay.context.ChatMessage
 import app.nextsay.context.MessageRole
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -40,6 +41,18 @@ class LatestContextCacheTest {
         val latest = context(QQ, "新屏")
         assertTrue(cache.complete(latestTicket, latest))
         assertSame(latest, cache.fresh(QQ))
+    }
+
+    @Test
+    fun `current epoch identifies the active page and changes on same app refresh`() {
+        val first = cache.markPageChanged(QQ)
+        assertEquals(first, cache.currentEpoch(QQ))
+
+        val second = cache.markPageChanged(QQ)
+
+        assertTrue(second > first)
+        assertEquals(second, cache.currentEpoch(QQ))
+        assertNull(cache.currentEpoch(WECHAT))
     }
 
     @Test

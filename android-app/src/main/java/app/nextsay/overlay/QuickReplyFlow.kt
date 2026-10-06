@@ -43,8 +43,12 @@ class QuickReplyFlow(
             is ContextCaptureResult.CaptureError -> captureError(result.message)
             ContextCaptureResult.Busy -> captureError("正在读取对话，请稍候")
             ContextCaptureResult.Cancelled -> {
-                controller.dismiss()
-                dismiss()
+                // A cancelled/stale capture must not leave the quick window
+                // showing its previous "waiting" state as if nothing ran.
+                // Keep the window available for an immediate retry.
+                if (controller.isCaptureCurrent(ticket)) {
+                    captureError("读取当前对话失败，请松手后重试")
+                }
             }
         }
     }

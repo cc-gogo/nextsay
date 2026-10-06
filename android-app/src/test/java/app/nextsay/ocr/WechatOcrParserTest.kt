@@ -78,6 +78,17 @@ class WechatOcrParserTest {
     }
 
     @Test
+    fun `filters weekday and period-of-day separators even with bubbles`() {
+        val separators = listOf("昨天上午10:57", "昨天 上午11:46", "星期二 晚上8:05", "2025年3月4日 下午3:01", "下午3：01", "|昨天上午10:57")
+        val blocks = listOf(block("小明", 430, 90, 650, 155), block("有效消息", 80, 480, 400, 550)) +
+            separators.mapIndexed { index, text -> block(text, 400, 600 + index * 80, 680, 650 + index * 80) }
+        val result = parser.parse(blocks, 1080, 2400, 1280,
+            bubbles = listOf(OcrBubble(ScreenRect(60, 470, 420, 560), MessageRole.OTHER)))!!
+
+        assertEquals(listOf("有效消息"), result.context.messages.map { it.text })
+    }
+
+    @Test
     fun `long incoming line is classified by its left edge`() {
         val result = parser.parse(
             blocks = listOf(
@@ -118,6 +129,22 @@ class WechatOcrParserTest {
         )
 
         assertNull(result)
+    }
+
+    @Test
+    fun `low confidence centered header still wins over a stale fallback title`() {
+        val result = parser.parse(
+            blocks = listOf(
+                block("田颖", 548, 178, 641, 229, confidence = 0.51f),
+                block("你好", 80, 430, 400, 500),
+            ),
+            screenWidth = 1200,
+            screenHeight = 2670,
+            contentBottom = 1280,
+            fallbackTitle = "李浩",
+        )!!
+
+        assertEquals("田颖", result.title)
     }
 
     @Test

@@ -45,6 +45,13 @@ class OverlayController(
         if (current is OverlayState.Loading) mutableState.value = OverlayState.Preview(current.context)
     }
 
+    /** Cancelled work must not leave the presentation in a stale Loading state. */
+    fun cancelPendingGeneration() {
+        generationEpoch += 1
+        val current = mutableState.value
+        if (current is OverlayState.Loading) mutableState.value = OverlayState.Preview(current.context)
+    }
+
     fun isCaptureCurrent(ticket: Long): Boolean = ticket == generationEpoch
 
     fun completeCapture(ticket: Long, context: ChatContext): Boolean {

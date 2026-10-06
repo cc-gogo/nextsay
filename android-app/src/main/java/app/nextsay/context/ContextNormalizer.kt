@@ -86,7 +86,10 @@ class ContextNormalizer {
             "com.tencent.tim" to "qq",
             "com.tencent.qqlite" to "qq",
         )
-        val TIME_PATTERN = Regex("^(?:今天|昨天)?\\s*(?:[01]?\\d|2[0-3]):[0-5]\\d$")
+        val TIME_PATTERN = Regex(
+            "^[|｜丨]?\\s*(?:(?:\\d{4}年)?\\d{1,2}月\\d{1,2}日|今天|昨天|前天|星期[一二三四五六日天]|周[一二三四五六日天])?\\s*" +
+                "(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\\s*(?:[01]?\\d|2[0-3])[:：][0-5]\\d$",
+        )
         val CHAT_CHROME = setOf("返回", "聊天信息", "更多", "发送", "语音", "表情", "相册", "拍摄")
         val QQ_MESSAGE_VIEW_IDS = setOf("mjh", "mjn", "mjo")
         const val DUPLICATE_Y_TOLERANCE = 24

@@ -65,6 +65,11 @@ class LatestContextCache {
     fun isDirty(packageName: String): Boolean =
         activePackage == packageName && (context == null || capturedEpoch != pageEpoch)
 
+    /** Current page token, used to reject late work from a previous chat. */
+    @Synchronized
+    fun currentEpoch(packageName: String): Long? =
+        pageEpoch.takeIf { activePackage == packageName }
+
     @Synchronized
     fun clear() {
         activePackage = null

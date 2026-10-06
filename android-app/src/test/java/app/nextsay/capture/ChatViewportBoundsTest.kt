@@ -20,4 +20,12 @@ class ChatViewportBoundsTest {
     @Test fun keyboardWindowTopIsPreferredWhenInputNodeIsMissing() {
         assertEquals(1344, ChatViewportBounds.bottom(2400, 1560, emptyList(), 216))
     }
+    @Test fun inputBarTopIsFoundAboveTheKeyboardFromItsColorBand() {
+        // Chat background 0xEDEDED until 1470, input bar 0xF7F7F7 until the IME at 1647.
+        val column = { y: Int -> if (y < 1470) 0xFFEDEDED.toInt() else 0xFFF7F7F7.toInt() }
+        assertEquals(1470, ChatViewportBounds.inputBarTop(2670, 1647, column))
+    }
+    @Test fun uniformColumnHasNoInputBar() {
+        assertNull(ChatViewportBounds.inputBarTop(2670, 1647) { 0xFFEDEDED.toInt() })
+    }
 }

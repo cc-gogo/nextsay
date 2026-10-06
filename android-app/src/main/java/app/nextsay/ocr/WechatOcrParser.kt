@@ -20,14 +20,19 @@ class WechatOcrParser {
         require(screenWidth > 0 && screenHeight > 0) { "screen dimensions must be positive" }
         require(contentBottom in 1..screenHeight) { "contentBottom must be on screen" }
 
-        val usable = blocks.mapNotNull { block ->
+        val normalized = blocks.mapNotNull { block ->
             val text = normalize(block.text)
-            block.copy(text = text).takeIf { text.isNotEmpty() && block.confidence >= MIN_CONFIDENCE }
+            block.copy(text = text).takeIf { text.isNotEmpty() }
         }
+        val usable = normalized.filter { it.confidence >= MIN_CONFIDENCE }
         val headerBottom = (screenHeight * HEADER_BOTTOM_RATIO).toInt()
         val headerTop = (screenHeight * HEADER_TOP_RATIO).toInt()
         val isQq = sourceApp == "qq"
-        val titleCandidates = usable
+        // Short CJK names often score just below the message threshold. The
+        // centered header slot is strong evidence on its own, and dropping
+        // the title would mislabel the chat with a stale fallback.
+        val titleCandidates = normalized
+            .filter { it.confidence >= MIN_TITLE_CONFIDENCE }
             .filter { block ->
                 block.bounds.top >= headerTop &&
                     block.bounds.bottom <= headerBottom &&
@@ -240,6 +245,7 @@ class WechatOcrParser {
     private companion object {
         const val WECHAT_PACKAGE = "com.tencent.mm"
         const val MIN_CONFIDENCE = 0.55f
+        const val MIN_TITLE_CONFIDENCE = 0.3f
         const val HEADER_TOP_RATIO = 0.025f
         const val HEADER_BOTTOM_RATIO = 0.09f
         const val OTHER_LEFT_EDGE = 0.28f
@@ -251,7 +257,13 @@ class WechatOcrParser {
         const val MAX_LINE_GAP_RATIO = 0.008f
         const val MAX_LINE_LEFT_SHIFT_RATIO = 0.12f
         val WHITESPACE_PATTERN = Regex("\\s+")
-        val TIME_PATTERN = Regex("^(?:今天|昨天)?\\s*(?:[01]?\\d|2[0-3]):[0-5]\\d$")
+        // WeChat separators: "11:46", "昨天 上午11:46", "星期二 晚上8:05", "2025年3月4日 下午3:01".
+        // OCR often drops the space between the day and the period of day.
+        // OCR sometimes reads the separator's faint left edge as a leading bar.
+        val TIME_PATTERN = Regex(
+            "^[|｜丨]?\\s*(?:(?:\\d{4}年)?\\d{1,2}月\\d{1,2}日|今天|昨天|前天|星期[一二三四五六日天]|周[一二三四五六日天])?\\s*" +
+                "(?:凌晨|早上|上午|中午|下午|傍晚|晚上)?\\s*(?:[01]?\\d|2[0-3])[:：][0-5]\\d$",
+        )
         val DATE_TIME_PATTERN = Regex("^\\d{1,2}月\\d{1,2}日\\s*(?:[01]?\\d|2[0-3]):[0-5]\\d$")
         val GROUP_TITLE_PATTERN = Regex("^.+[（(]\\d+[)）]$")
         val QQ_STATUS_PATTERN = Regex("^(?:在线|离线|手机在线|电脑在线|忙碌|离开|隐身|请勿打扰)(?:\\s*[-·]\\s*(?:[245]G|Wi-?Fi|手机在线))?$", RegexOption.IGNORE_CASE)

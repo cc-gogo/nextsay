@@ -403,6 +403,7 @@ class OverlayWindow(
     private var menu: View? = null
     var onEditorVisibilityChanged: (Boolean) -> Unit = {}
     val isEditing: Boolean get() = instructionEditorAttached || menu != null || panelAttached
+    val isInstructionEditorOpen: Boolean get() = instructionEditorAttached
     private var draggedSinceDown = false
     private val floatingTop: Int get() = (screenHeight * .09f).toInt() + 12.dp
     // Reserve the bottom input/keyboard entry area, including window/status-bar offsets.
@@ -452,31 +453,45 @@ class OverlayWindow(
                 overlayWindowType = preferredType
                 triggerLayoutParams = triggerParams()
             }
-            // Some ROMs can remove an accessibility overlay without notifying
-            // the service. The boolean alone then becomes stale and prevents
-            // the trigger from ever being added again.
-            if (!trigger.isAttachedToWindow) {
-                // WindowManager may remove a view without notifying us. The
-                // actual attachment is authoritative; never add an attached
-                // view a second time, even if the boolean is stale.
-                triggerAttached = false
-                restoreTriggerPosition()
-                try {
-                    windowManager.addView(trigger, triggerLayoutParams)
-                    triggerAttached = true
-                    Log.d("NextSayOverlay", "trigger attached type=$overlayWindowType x=${triggerLayoutParams.x} y=${triggerLayoutParams.y}")
-                } catch (error: RuntimeException) {
-                    Log.e("NextSayOverlay", "add trigger failed", error)
-                }
-            } else triggerAttached = true
-        } else if (!active) {
+            ensureTriggerAttached()
+            setTriggerShown(true)
+        } else {
             hideAllContent()
-            if (triggerAttached || trigger.isAttachedToWindow) {
-                Log.d("NextSayOverlay", "removing trigger because supported app became inactive")
-                windowManager.removeViewImmediate(trigger)
-                triggerAttached = false
-            }
+            // Keep the window attached but invisible and touch-through. MIUI
+            // freezes a background process that has no window, which stops all
+            // accessibility events and the trigger can never come back.
+            setTriggerShown(false)
+            ensureTriggerAttached()
         }
+    }
+
+    private fun ensureTriggerAttached() {
+        // Some ROMs can remove an accessibility overlay without notifying
+        // the service. The actual attachment is authoritative; never add an
+        // attached view a second time, even if the boolean is stale.
+        if (trigger.isAttachedToWindow) {
+            triggerAttached = true
+            return
+        }
+        triggerAttached = false
+        restoreTriggerPosition()
+        try {
+            windowManager.addView(trigger, triggerLayoutParams)
+            triggerAttached = true
+            Log.d("NextSayOverlay", "trigger attached type=$overlayWindowType x=${triggerLayoutParams.x} y=${triggerLayoutParams.y}")
+        } catch (error: RuntimeException) {
+            Log.e("NextSayOverlay", "add trigger failed", error)
+        }
+    }
+
+    private fun setTriggerShown(shown: Boolean) {
+        val flags = if (shown) triggerLayoutParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            else triggerLayoutParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        val alpha = if (shown) 1f else 0f
+        if (flags == triggerLayoutParams.flags && alpha == triggerLayoutParams.alpha) return
+        triggerLayoutParams.flags = flags
+        triggerLayoutParams.alpha = alpha
+        if (triggerAttached && trigger.isAttachedToWindow) windowManager.updateViewLayout(trigger, triggerLayoutParams)
     }
 
     fun renderAdvanced(state: OverlayState) {
